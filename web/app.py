@@ -310,9 +310,21 @@ def _is_pid_running(pid: int) -> bool:
         return False
 
 
+def _is_pid_our_bot_process(pid: int) -> bool:
+    proc_cmdline = Path(f"/proc/{pid}/cmdline")
+    if not proc_cmdline.exists():
+        return False
+    try:
+        raw = proc_cmdline.read_bytes().decode("utf-8", errors="ignore")
+    except OSError:
+        return False
+    cmd = raw.replace("\x00", " ").strip().lower()
+    return "bot.py" in cmd and str(ROOT).lower() in cmd
+
+
 def _bot_status() -> dict:
     pid = _read_pid()
-    running = bool(pid and _is_pid_running(pid))
+    running = bool(pid and _is_pid_running(pid) and _is_pid_our_bot_process(pid))
     if pid and not running and PID_PATH.exists():
         PID_PATH.unlink(missing_ok=True)
     return {
@@ -349,6 +361,13 @@ def _stop_bot() -> dict:
         return {"ok": True, "message": "bot already stopped", **status}
 
     pid = int(status["pid"])
+    if not _is_pid_our_bot_process(pid):
+        PID_PATH.unlink(missing_ok=True)
+        return {
+            "ok": False,
+            "message": "pid file pointed to non-bot process; refused to kill",
+            **_bot_status(),
+        }
     try:
         os.kill(pid, signal.SIGTERM)
     except OSError as exc:

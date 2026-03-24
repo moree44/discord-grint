@@ -64,6 +64,11 @@ class EventStore:
             thread_id=scope.thread_id,
             limit=limit,
         )
+        rows = [
+            row
+            for row in rows
+            if row["event_type"] in ("user_message", "bot_reply")
+        ]
         # oldest first for prompt readability
         rows.reverse()
         return [f"{row['author_name'] or 'user'}: {row['content']}" for row in rows]

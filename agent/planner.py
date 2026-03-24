@@ -54,8 +54,10 @@ def plan_reply(
             return PlanResult(action="reply", delay_type="keyword_hit", reason="keyword_hit")
         return PlanResult(action="ignore", delay_type=None, reason="keyword_skip")
 
+    # Global smalltalk chance acts as a ceiling, profile chance controls channel behavior.
+    # This keeps quiet/slow profiles truly quieter instead of being overridden by global settings.
     smalltalk_chance = agent_settings.smalltalk_reply_chance
-    effective_random_chance = max(profile.chance["random"], smalltalk_chance)
+    effective_random_chance = min(profile.chance["random"], smalltalk_chance)
     if random.random() < effective_random_chance:
         return PlanResult(action="reply", delay_type="random", reason="random_chime")
     return PlanResult(action="ignore", delay_type=None, reason="random_skip")
