@@ -9,9 +9,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ─── CONFIG ───────────────────────────────────────────────
-from config import SETTINGS
+from config import SETTINGS, resolve_channel_config
 
-TARGET_CHANNELS = list(SETTINGS.channels.channel_skills.keys())
+TARGET_CHANNELS = SETTINGS.routing.watched_channel_ids
 PROJECT_TERMS = (
     "donut", "token", "airdrop", "wallet", "testnet", "launch",
     "farming", "wagmi", "ngmi", "whitelist", "funding", "agentic"
@@ -56,7 +56,7 @@ def passes_basic_filters(message, allow_short_message=False):
     return True, None
 
 
-def should_reply(message, client_user):
+def should_reply(message, client_user, reply_profile):
     content = message.content.lower()
 
     ok, reason = passes_basic_filters(message, allow_short_message=False)
@@ -74,11 +74,11 @@ def should_reply(message, client_user):
         return True, "mentioned"
 
     if any(kw in content for kw in SETTINGS.ai.keywords):
-        if random.random() < SETTINGS.reply.chance["keyword_hit"]:
+        if random.random() < reply_profile.chance["keyword_hit"]:
             return True, "keyword_hit"
         return False, None
 
-    if random.random() < SETTINGS.reply.chance["random"]:
+    if random.random() < reply_profile.chance["random"]:
         return True, "random"
 
     return False, None
@@ -251,15 +251,29 @@ async def on_ready():
         ch = client.get_channel(ch_id)
         if ch:
             slowmode = ch.slowmode_delay
-            status = "✅" if SETTINGS.reply.delays["replied_to_us"][0] > slowmode else "⚠️ "
-            print(f"  {status} #{ch.name} — slowmode: {slowmode}s")
+            try:
+                resolved = resolve_channel_config(
+                    SETTINGS,
+                    ch.guild.id if getattr(ch, "guild", None) else None,
+                    ch_id,
+                )
+                min_reply_delay = resolved.profile.delays["replied_to_us"][0]
+                status = "✅" if min_reply_delay > slowmode else "⚠️ "
+                print(
+                    f"  {status} #{ch.name} — slowmode: {slowmode}s, profile: {resolved.profile_name}"
+                )
+            except Exception as e:
+                print(f"  ⚠️  #{ch.name} config error: {e}")
     print(f"{'='*45}\n")
 
 @client.event
 async def on_message(message):
     if message.author == client.user:
         return
-    if message.channel.id not in TARGET_CHANNELS:
+
+    guild_id = message.guild.id if message.guild else None
+    resolved = resolve_channel_config(SETTINGS, guild_id, message.channel.id)
+    if not resolved.enabled:
         return
 
     is_convo = False
@@ -271,7 +285,7 @@ async def on_message(message):
         except (discord.NotFound, discord.Forbidden, discord.HTTPException) as e:
             print(f"⚠️  Failed to resolve reply reference: {e}")
 
-    skill_name = SETTINGS.channels.channel_skills.get(message.channel.id, "donut_browser")
+    skill_name = resolved.skill
 
     if is_convo:
         do_reply, _ = passes_basic_filters(message, allow_short_message=True)
@@ -279,12 +293,14 @@ async def on_message(message):
             return
         delay_type = "replied_to_us"
     else:
-        do_reply, delay_type = should_reply(message, client.user)
+        do_reply, delay_type = should_reply(message, client.user, resolved.profile)
         if not do_reply:
             return
 
-    delay = random.randint(*SETTINGS.reply.delays[delay_type])
-    print(f"💬 [{delay_type}] Replying in {delay}s → {message.content[:50]}...")
+    delay = random.randint(*resolved.profile.delays[delay_type])
+    print(
+        f"💬 [{delay_type}|{resolved.profile_name}] Replying in {delay}s → {message.content[:50]}..."
+    )
     await asyncio.sleep(delay)
 
     reply_text = await get_reply(message.channel, message.content, skill_name, is_convo)
