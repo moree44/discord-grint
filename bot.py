@@ -9,15 +9,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ─── CONFIG ───────────────────────────────────────────────
-from config import (
-    DISCORD_TOKEN, OPENROUTER_KEY, CHANNEL_SKILLS,
-    MODELS, DELAYS, REPLY_CHANCE, KEYWORDS,
-    MAX_TOKENS_CONVERSATION, MAX_TOKENS_CHIME_IN,
-    TEMPERATURE, HISTORY_LIMIT,
-    MIN_MESSAGE_LENGTH, SKIP_PREFIXES
-)
+from config import SETTINGS
 
-TARGET_CHANNELS = list(CHANNEL_SKILLS.keys())
+TARGET_CHANNELS = list(SETTINGS.channels.channel_skills.keys())
 PROJECT_TERMS = (
     "donut", "token", "airdrop", "wallet", "testnet", "launch",
     "farming", "wagmi", "ngmi", "whitelist", "funding", "agentic"
@@ -31,7 +25,7 @@ CRYPTO_SIGNAL_TERMS = (
 client = discord.Client(self_bot=True)
 ai     = AsyncOpenAI(
     base_url="https://openrouter.ai/api/v1",
-    api_key=OPENROUTER_KEY
+    api_key=SETTINGS.credentials.openrouter_key
 )
 
 # ─── LOAD SKILL ───────────────────────────────────────────
@@ -53,9 +47,9 @@ def passes_basic_filters(message, allow_short_message=False):
         return False, None
     if not message.content:
         return False, None
-    if not allow_short_message and len(message.content) < MIN_MESSAGE_LENGTH:
+    if not allow_short_message and len(message.content) < SETTINGS.filters.min_message_length:
         return False, None
-    if message.content.startswith(SKIP_PREFIXES):
+    if message.content.startswith(SETTINGS.filters.skip_prefixes):
         return False, None
     if re.match(r'^[\W\d\s]+$', message.content):
         return False, None
@@ -79,12 +73,12 @@ def should_reply(message, client_user):
     if client_user.mentioned_in(message):
         return True, "mentioned"
 
-    if any(kw in content for kw in KEYWORDS):
-        if random.random() < REPLY_CHANCE["keyword_hit"]:
+    if any(kw in content for kw in SETTINGS.ai.keywords):
+        if random.random() < SETTINGS.reply.chance["keyword_hit"]:
             return True, "keyword_hit"
         return False, None
 
-    if random.random() < REPLY_CHANCE["random"]:
+    if random.random() < SETTINGS.reply.chance["random"]:
         return True, "random"
 
     return False, None
@@ -134,7 +128,7 @@ def _quick_smalltalk_reply(message_content: str) -> str | None:
 
 async def get_reply(channel, message_content, skill_name, is_conversation=False, retries=3):
     history = []
-    async for msg in channel.history(limit=HISTORY_LIMIT, oldest_first=True):
+    async for msg in channel.history(limit=SETTINGS.ai.history_limit, oldest_first=True):
         if msg.content:
             history.append(f"{msg.author.display_name}: {msg.content}")
 
@@ -175,7 +169,7 @@ Jump in naturally, like you've been reading along.
 {style_guard}"""
 
     system_prompt = load_skill(skill_name)
-    models_to_try = MODELS or ["arcee-ai/trinity-large-preview:free"]
+    models_to_try = SETTINGS.ai.models or ["arcee-ai/trinity-large-preview:free"]
 
     for model_name in models_to_try:
         for attempt in range(retries):
@@ -186,8 +180,12 @@ Jump in naturally, like you've been reading along.
                         {"role": "system", "content": system_prompt},
                         {"role": "user",   "content": user_prompt}
                     ],
-                    max_tokens=MAX_TOKENS_CONVERSATION if is_conversation else MAX_TOKENS_CHIME_IN,
-                    temperature=TEMPERATURE
+                    max_tokens=(
+                        SETTINGS.ai.max_tokens_conversation
+                        if is_conversation
+                        else SETTINGS.ai.max_tokens_chime_in
+                    ),
+                    temperature=SETTINGS.ai.temperature
                 )
 
                 content = response.choices[0].message.content
@@ -253,7 +251,7 @@ async def on_ready():
         ch = client.get_channel(ch_id)
         if ch:
             slowmode = ch.slowmode_delay
-            status = "✅" if DELAYS["replied_to_us"][0] > slowmode else "⚠️ "
+            status = "✅" if SETTINGS.reply.delays["replied_to_us"][0] > slowmode else "⚠️ "
             print(f"  {status} #{ch.name} — slowmode: {slowmode}s")
     print(f"{'='*45}\n")
 
@@ -273,7 +271,7 @@ async def on_message(message):
         except (discord.NotFound, discord.Forbidden, discord.HTTPException) as e:
             print(f"⚠️  Failed to resolve reply reference: {e}")
 
-    skill_name = CHANNEL_SKILLS.get(message.channel.id, "donut_browser")
+    skill_name = SETTINGS.channels.channel_skills.get(message.channel.id, "donut_browser")
 
     if is_convo:
         do_reply, _ = passes_basic_filters(message, allow_short_message=True)
@@ -285,7 +283,7 @@ async def on_message(message):
         if not do_reply:
             return
 
-    delay = random.randint(*DELAYS[delay_type])
+    delay = random.randint(*SETTINGS.reply.delays[delay_type])
     print(f"💬 [{delay_type}] Replying in {delay}s → {message.content[:50]}...")
     await asyncio.sleep(delay)
 
@@ -293,4 +291,4 @@ async def on_message(message):
     await safe_reply(message, reply_text)
 
 # ─── RUN ──────────────────────────────────────────────────
-client.run(DISCORD_TOKEN)
+client.run(SETTINGS.credentials.discord_token)

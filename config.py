@@ -1,9 +1,10 @@
-# ═══════════════════════════════════════════
-#           DISCORD GRIND BOT CONFIG
-# ═══════════════════════════════════════════
+"""Centralized app settings for discord-grind-bot."""
 
+from dataclasses import dataclass
 import os
+
 from dotenv import load_dotenv
+
 load_dotenv()
 
 
@@ -23,51 +24,136 @@ def _parse_channel_ids(raw_value: str | None) -> list[int]:
         channel_ids.append(int(value))
     return channel_ids
 
-# ─── CREDENTIALS (dari .env) ────────────────
-DISCORD_TOKEN    = os.getenv("DISCORD_TOKEN")
-OPENROUTER_KEY   = os.getenv("OPENROUTER_API_KEY")
 
-# ─── TARGET CHANNELS ────────────────────────
-# Isi CHANNEL_IDS di .env dengan format: 123456789,987654321
-CHANNEL_IDS = _parse_channel_ids(os.getenv("CHANNEL_IDS"))
-DEFAULT_SKILL = os.getenv("DEFAULT_SKILL", "donut_browser")
-CHANNEL_SKILLS = {channel_id: DEFAULT_SKILL for channel_id in CHANNEL_IDS}
+@dataclass(frozen=True)
+class Credentials:
+    discord_token: str | None
+    openrouter_key: str | None
 
-# ─── AI MODELS ──────────────────────────────
-# Urutan = prioritas, kalau model 1 ratelimit → otomatis ke model 2, dst
-MODELS = [
-    "arcee-ai/trinity-large-preview:free",
-]
 
-# ─── REPLY SETTINGS ─────────────────────────
-# Chance bot reply (0.0 - 1.0)
-REPLY_CHANCE = {
-    "keyword_hit": 0.50,   # pesan contain keyword project
-    "random":      0.20,   # pesan random
-}
+@dataclass(frozen=True)
+class ChannelSettings:
+    channel_ids: list[int]
+    default_skill: str
 
-# Delay sebelum reply (detik) — sesuaikan dengan slowmode server
-DELAYS = {
-    "replied_to_us": (16, 30),    # ada yang reply ke bot
-    "mentioned":     (16, 25),    # bot di-mention
-    "keyword_hit":   (30, 90),    # pesan contain keyword
-    "random":        (45, 120),   # random chime in
-}
+    @property
+    def channel_skills(self) -> dict[int, str]:
+        return {channel_id: self.default_skill for channel_id in self.channel_ids}
 
-# ─── AI BEHAVIOR ────────────────────────────
-MAX_TOKENS_CONVERSATION = 55   # lebih ringkas biar ngobrol terasa natural
-MAX_TOKENS_CHIME_IN     = 40   # chime in pendek, ga kepanjangan
-TEMPERATURE             = 0.72 # turunin noise biar ga terlalu halu/random
-HISTORY_LIMIT           = 15   # berapa pesan terakhir dibaca sebagai konteks
 
-# ─── KEYWORDS TRIGGER ───────────────────────
-# Bot akan lebih sering reply kalau pesan mengandung kata ini
-KEYWORDS = [
-    "donut", "agent", "token", "airdrop", "wen",
-    "wallet", "browser", "launch", "testnet", "og glazer",
-    "wagmi", "ngmi", "raise", "funding", "whitelist"
-]
+@dataclass(frozen=True)
+class ReplySettings:
+    chance: dict[str, float]
+    delays: dict[str, tuple[int, int]]
 
-# ─── FILTER ─────────────────────────────────
-MIN_MESSAGE_LENGTH = 8   # skip pesan terlalu pendek
-SKIP_PREFIXES = ("http", "!", "/", ".", "$", "@")  # skip link & command
+
+@dataclass(frozen=True)
+class AISettings:
+    models: list[str]
+    max_tokens_conversation: int
+    max_tokens_chime_in: int
+    temperature: float
+    history_limit: int
+    keywords: list[str]
+
+
+@dataclass(frozen=True)
+class FilterSettings:
+    min_message_length: int
+    skip_prefixes: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class AppSettings:
+    credentials: Credentials
+    channels: ChannelSettings
+    reply: ReplySettings
+    ai: AISettings
+    filters: FilterSettings
+
+
+def load_settings() -> AppSettings:
+    credentials = Credentials(
+        discord_token=os.getenv("DISCORD_TOKEN"),
+        openrouter_key=os.getenv("OPENROUTER_API_KEY"),
+    )
+
+    channels = ChannelSettings(
+        channel_ids=_parse_channel_ids(os.getenv("CHANNEL_IDS")),
+        default_skill=os.getenv("DEFAULT_SKILL", "donut_browser"),
+    )
+
+    reply = ReplySettings(
+        chance={
+            "keyword_hit": 0.50,
+            "random": 0.20,
+        },
+        delays={
+            "replied_to_us": (16, 30),
+            "mentioned": (16, 25),
+            "keyword_hit": (30, 90),
+            "random": (45, 120),
+        },
+    )
+
+    ai = AISettings(
+        models=[
+            "arcee-ai/trinity-large-preview:free",
+        ],
+        max_tokens_conversation=55,
+        max_tokens_chime_in=40,
+        temperature=0.72,
+        history_limit=15,
+        keywords=[
+            "donut",
+            "agent",
+            "token",
+            "airdrop",
+            "wen",
+            "wallet",
+            "browser",
+            "launch",
+            "testnet",
+            "og glazer",
+            "wagmi",
+            "ngmi",
+            "raise",
+            "funding",
+            "whitelist",
+        ],
+    )
+
+    filters = FilterSettings(
+        min_message_length=8,
+        skip_prefixes=("http", "!", "/", ".", "$", "@"),
+    )
+
+    return AppSettings(
+        credentials=credentials,
+        channels=channels,
+        reply=reply,
+        ai=ai,
+        filters=filters,
+    )
+
+
+SETTINGS = load_settings()
+
+# Backward-compatible exports (for existing imports)
+DISCORD_TOKEN = SETTINGS.credentials.discord_token
+OPENROUTER_KEY = SETTINGS.credentials.openrouter_key
+
+CHANNEL_IDS = SETTINGS.channels.channel_ids
+DEFAULT_SKILL = SETTINGS.channels.default_skill
+CHANNEL_SKILLS = SETTINGS.channels.channel_skills
+
+MODELS = SETTINGS.ai.models
+DELAYS = SETTINGS.reply.delays
+REPLY_CHANCE = SETTINGS.reply.chance
+MAX_TOKENS_CONVERSATION = SETTINGS.ai.max_tokens_conversation
+MAX_TOKENS_CHIME_IN = SETTINGS.ai.max_tokens_chime_in
+TEMPERATURE = SETTINGS.ai.temperature
+HISTORY_LIMIT = SETTINGS.ai.history_limit
+KEYWORDS = SETTINGS.ai.keywords
+MIN_MESSAGE_LENGTH = SETTINGS.filters.min_message_length
+SKIP_PREFIXES = SETTINGS.filters.skip_prefixes
