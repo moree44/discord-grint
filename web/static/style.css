@@ -121,6 +121,19 @@ summary {
   gap: 8px;
 }
 
+.inline-3 {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 8px;
+}
+
+.section-label {
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: lowercase;
+  margin: 8px 0 6px;
+}
+
 .map-box {
   border: 1px dashed var(--line);
   padding: 8px;
@@ -207,6 +220,9 @@ summary {
     grid-template-columns: 1fr;
   }
   .inline {
+    grid-template-columns: 1fr;
+  }
+  .inline-3 {
     grid-template-columns: 1fr;
   }
 }

@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
+import fcntl
 import random
 import re
+import sys
+from pathlib import Path
 
 import discord
 from dotenv import load_dotenv
@@ -58,6 +62,34 @@ event_store = EventStore(
 )
 recent_context = RecentContextCache(max_items=SETTINGS.memory.max_recent_context)
 user_profiles = UserProfileStore(sqlite_store)
+_INSTANCE_LOCK_FILE = None
+_SEEN_MESSAGE_IDS: set[int] = set()
+_SEEN_MESSAGE_ORDER: deque[int] = deque(maxlen=4000)
+
+
+def _acquire_single_instance_lock() -> None:
+    global _INSTANCE_LOCK_FILE
+    runtime_dir = Path("runtime")
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = runtime_dir / "bot.instance.lock"
+    lock_fh = open(lock_path, "w", encoding="utf-8")
+    try:
+        fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        print("❌ Another bot instance is already running. Exiting.")
+        sys.exit(1)
+    _INSTANCE_LOCK_FILE = lock_fh
+
+
+def _is_duplicate_message(message_id: int) -> bool:
+    if message_id in _SEEN_MESSAGE_IDS:
+        return True
+    if len(_SEEN_MESSAGE_ORDER) == _SEEN_MESSAGE_ORDER.maxlen:
+        old_id = _SEEN_MESSAGE_ORDER.popleft()
+        _SEEN_MESSAGE_IDS.discard(old_id)
+    _SEEN_MESSAGE_ORDER.append(message_id)
+    _SEEN_MESSAGE_IDS.add(message_id)
+    return False
 
 
 def passes_basic_filters(message, allow_short_message: bool = False):
@@ -173,6 +205,10 @@ async def on_ready():
 
 @client.event
 async def on_message(message):
+    if _is_duplicate_message(message.id):
+        print(f"🔁 Skip duplicate message id={message.id}")
+        return
+
     if message.author == client.user:
         return
 
@@ -245,57 +281,86 @@ async def on_message(message):
     )
     await asyncio.sleep(delay)
 
+    cached_context = recent_context.get_context(
+        channel_id=scope.channel_id,
+        thread_id=scope.thread_id,
+        limit=SETTINGS.ai.history_limit,
+    )
+    db_context = event_store.get_recent_context(
+        scope=scope,
+        limit=SETTINGS.ai.history_limit,
+    )
+    combined_context = (cached_context + db_context)[-SETTINGS.ai.history_limit :]
+    profile = user_profiles.get_profile(message.author.id)
+    system_prompt = build_system_prompt(resolved.skill, mode.is_crypto)
+    user_prompt = build_user_prompt(
+        latest_message=message.content,
+        recent_context=combined_context,
+        mode=mode.mode,
+        user_profile=profile,
+        is_direct_reply=mode.is_direct_reply,
+    )
+    max_tokens = (
+        SETTINGS.ai.max_tokens_conversation
+        if mode.is_direct_reply
+        else SETTINGS.ai.max_tokens_chime_in
+    )
+
     reply_candidate = None
     if mode.mode == "smalltalk" and not mode.is_crypto:
         reply_candidate = _quick_smalltalk_reply(message.content)
 
     if not reply_candidate:
-        cached_context = recent_context.get_context(
-            channel_id=scope.channel_id,
-            thread_id=scope.thread_id,
-            limit=SETTINGS.ai.history_limit,
-        )
-        db_context = event_store.get_recent_context(
-            scope=scope,
-            limit=SETTINGS.ai.history_limit,
-        )
-        combined_context = (cached_context + db_context)[-SETTINGS.ai.history_limit :]
-        profile = user_profiles.get_profile(message.author.id)
-        system_prompt = build_system_prompt(resolved.skill, mode.is_crypto)
-        user_prompt = build_user_prompt(
-            latest_message=message.content,
-            recent_context=combined_context,
-            mode=mode.mode,
-            user_profile=profile,
-            is_direct_reply=mode.is_direct_reply,
-        )
         generation = await generate_reply(
             ai=ai,
             models_to_try=SETTINGS.ai.models or ["arcee-ai/trinity-large-preview:free"],
             system_prompt=system_prompt,
             user_prompt=user_prompt,
-            max_tokens=(
-                SETTINGS.ai.max_tokens_conversation
-                if mode.is_direct_reply
-                else SETTINGS.ai.max_tokens_chime_in
-            ),
+            max_tokens=max_tokens,
             temperature=SETTINGS.ai.temperature,
             retries=3,
         )
         reply_candidate = generation.text
 
+    recent_replies = event_store.get_recent_bot_replies(
+        scope=scope,
+        limit=SETTINGS.memory.anti_repeat_window,
+    )
     reviewed_reply = critique_reply(
         text=reply_candidate,
         mode=mode.mode,
         is_crypto=mode.is_crypto,
-        recent_replies=event_store.get_recent_bot_replies(
-            scope=scope,
-            limit=SETTINGS.memory.anti_repeat_window,
-        ),
+        recent_replies=recent_replies,
     )
     if not reviewed_reply:
-        print("⚠️  Critic rejected candidate reply")
-        return
+        print("⚠️  Critic rejected candidate reply, regenerating once...")
+        banned = " | ".join(recent_replies[:4]) if recent_replies else "(none)"
+        retry_prompt = (
+            f"{user_prompt}\n\n"
+            "Retry constraints:\n"
+            "- Previous draft was rejected.\n"
+            "- Keep one short sentence.\n"
+            "- Stay tightly relevant to latest message.\n"
+            f"- Do not repeat these recent bot replies: {banned}\n"
+        )
+        retry_generation = await generate_reply(
+            ai=ai,
+            models_to_try=SETTINGS.ai.models or ["arcee-ai/trinity-large-preview:free"],
+            system_prompt=system_prompt,
+            user_prompt=retry_prompt,
+            max_tokens=min(max_tokens, 36),
+            temperature=max(0.35, SETTINGS.ai.temperature - 0.15),
+            retries=2,
+        )
+        reviewed_reply = critique_reply(
+            text=retry_generation.text,
+            mode=mode.mode,
+            is_crypto=mode.is_crypto,
+            recent_replies=recent_replies,
+        )
+        if not reviewed_reply:
+            print("⚠️  Critic rejected retry reply")
+            return
 
     sent = await safe_reply(message, reviewed_reply)
     if not sent:
@@ -317,5 +382,5 @@ async def on_message(message):
         metadata={"mode": mode.mode, "delay_type": plan.delay_type},
     )
 
-
+_acquire_single_instance_lock()
 client.run(SETTINGS.credentials.discord_token)

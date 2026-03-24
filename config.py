@@ -290,14 +290,26 @@ def load_settings() -> AppSettings:
     profiles = {
         "normal": ReplyProfile(
             chance={
-                "keyword_hit": 0.50,
-                "random": 0.20,
+                "keyword_hit": _float_setting("KEYWORD_REPLY_CHANCE", 0.50),
+                "random": _float_setting("RANDOM_REPLY_CHANCE", 0.20),
             },
             delays={
-                "replied_to_us": (16, 30),
-                "mentioned": (16, 25),
-                "keyword_hit": (30, 90),
-                "random": (45, 120),
+                "replied_to_us": (
+                    _int_setting("DELAY_DIRECT_MIN", 16),
+                    _int_setting("DELAY_DIRECT_MAX", 30),
+                ),
+                "mentioned": (
+                    _int_setting("DELAY_DIRECT_MIN", 16),
+                    _int_setting("DELAY_DIRECT_MAX", 30),
+                ),
+                "keyword_hit": (
+                    _int_setting("DELAY_KEYWORD_MIN", 30),
+                    _int_setting("DELAY_KEYWORD_MAX", 90),
+                ),
+                "random": (
+                    _int_setting("DELAY_RANDOM_MIN", 45),
+                    _int_setting("DELAY_RANDOM_MAX", 120),
+                ),
             },
         ),
         "slow_60s": ReplyProfile(

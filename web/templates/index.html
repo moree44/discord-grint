@@ -74,22 +74,59 @@
               {% endfor %}
             </div>
           </div>
+          <div class="section-label">reply chance</div>
           <div class="inline">
-            <label>RANDOM_COOLDOWN_SECONDS
+            <label>smalltalk chance (0.0 - 1.0)
+              <input name="SMALLTALK_REPLY_CHANCE" value="{{ settings.SMALLTALK_REPLY_CHANCE }}" placeholder="0.35">
+            </label>
+            <label>keyword chance (0.0 - 1.0)
+              <input name="KEYWORD_REPLY_CHANCE" value="{{ settings.KEYWORD_REPLY_CHANCE }}" placeholder="0.50">
+            </label>
+          </div>
+          <label>random chime chance (0.0 - 1.0)
+            <input name="RANDOM_REPLY_CHANCE" value="{{ settings.RANDOM_REPLY_CHANCE }}" placeholder="0.20">
+          </label>
+
+          <div class="section-label">minimum gap between replies</div>
+          <div class="inline">
+            <label>random gap seconds
               <input name="RANDOM_COOLDOWN_SECONDS" value="{{ settings.RANDOM_COOLDOWN_SECONDS }}">
             </label>
-            <label>DIRECT_REPLY_COOLDOWN_SECONDS
+            <label>direct reply gap seconds
               <input name="DIRECT_REPLY_COOLDOWN_SECONDS" value="{{ settings.DIRECT_REPLY_COOLDOWN_SECONDS }}">
             </label>
           </div>
-          <label>SMALLTALK_REPLY_CHANCE (0.0 - 1.0)
-            <input name="SMALLTALK_REPLY_CHANCE" value="{{ settings.SMALLTALK_REPLY_CHANCE }}" placeholder="0.35">
-          </label>
+
+          <div class="section-label">reply delay window (actual send delay)</div>
+          <div class="inline-3">
+            <label>direct min
+              <input name="DELAY_DIRECT_MIN" value="{{ settings.DELAY_DIRECT_MIN }}">
+            </label>
+            <label>direct max
+              <input name="DELAY_DIRECT_MAX" value="{{ settings.DELAY_DIRECT_MAX }}">
+            </label>
+            <label>keyword min
+              <input name="DELAY_KEYWORD_MIN" value="{{ settings.DELAY_KEYWORD_MIN }}">
+            </label>
+          </div>
+          <div class="inline-3">
+            <label>keyword max
+              <input name="DELAY_KEYWORD_MAX" value="{{ settings.DELAY_KEYWORD_MAX }}">
+            </label>
+            <label>random min
+              <input name="DELAY_RANDOM_MIN" value="{{ settings.DELAY_RANDOM_MIN }}">
+            </label>
+            <label>random max
+              <input name="DELAY_RANDOM_MAX" value="{{ settings.DELAY_RANDOM_MAX }}">
+            </label>
+          </div>
+
+          <div class="section-label">memory</div>
           <div class="inline">
-            <label>MEMORY_TTL_SECONDS
+            <label>memory ttl seconds
               <input name="MEMORY_TTL_SECONDS" value="{{ settings.MEMORY_TTL_SECONDS }}">
             </label>
-            <label>ANTI_REPEAT_WINDOW
+            <label>anti-repeat window
               <input name="ANTI_REPEAT_WINDOW" value="{{ settings.ANTI_REPEAT_WINDOW }}">
             </label>
           </div>
