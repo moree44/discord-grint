@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>discord-grint :: terminal control</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <main class="wrap">
+    <header class="bar">
+      <div class="title">discord-grint / terminal control</div>
+      <div class="muted">monochrome</div>
+    </header>
+
+    <section class="grid">
+      <article class="card">
+        <h2>bot control</h2>
+        <div class="control-row">
+          <button type="button" id="btn-start">start bot</button>
+          <button type="button" id="btn-stop">stop bot</button>
+          <button type="button" id="btn-restart">restart bot</button>
+        </div>
+        <div class="status-line">
+          <span class="k">status</span>
+          <span id="bot-status">-</span>
+        </div>
+        <div class="status-line">
+          <span class="k">pid</span>
+          <span id="bot-pid">-</span>
+        </div>
+        <p class="muted" id="control-msg"></p>
+      </article>
+
+      <article class="card">
+        <h2>quick config (web_settings.json)</h2>
+        <form id="settings-form">
+          <label>BASE_PERSONA
+            <input value="{{ base_persona }}" readonly>
+          </label>
+          <label>AI_MODELS (comma separated)
+            <input name="AI_MODELS" value="{{ settings.AI_MODELS }}" placeholder="arcee-ai/trinity-large-preview:free">
+          </label>
+          <p class="muted">AI_MODELS disimpan di .env. Setting lain disimpan di web_settings.json.</p>
+          <label>PROJECT_SKILL_DEFAULT (fallback)
+            <select name="DEFAULT_SKILL" id="default-skill">
+              <option value="{{ settings.DEFAULT_SKILL }}">{{ settings.DEFAULT_SKILL or "select skill" }}</option>
+              {% for skill in skill_options %}
+              <option value="{{ skill }}">{{ skill }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>CHANNEL_IDS
+            <input name="CHANNEL_IDS" value="{{ settings.CHANNEL_IDS }}" placeholder="id,id,id">
+          </label>
+          <div class="map-box">
+            <div class="map-head">
+              <span>channel skill mapping</span>
+              <button type="button" id="btn-add-map">add channel + skill</button>
+            </div>
+            <input type="hidden" name="CHANNEL_SKILLS" id="channel-skills-hidden" value="{{ settings.CHANNEL_SKILLS }}">
+            <div id="channel-skill-list" data-skill-options='{{ skill_options|tojson }}'>
+              {% for row in channel_skill_rows %}
+              <div class="map-row">
+                <input class="map-channel" placeholder="channel id" value="{{ row.channel_id }}">
+                <select class="map-skill">
+                  <option value="{{ row.skill }}">{{ row.skill }}</option>
+                  {% for skill in skill_options %}
+                  <option value="{{ skill }}">{{ skill }}</option>
+                  {% endfor %}
+                </select>
+                <button type="button" class="btn-remove-map">remove</button>
+              </div>
+              {% endfor %}
+            </div>
+          </div>
+          <div class="inline">
+            <label>RANDOM_COOLDOWN_SECONDS
+              <input name="RANDOM_COOLDOWN_SECONDS" value="{{ settings.RANDOM_COOLDOWN_SECONDS }}">
+            </label>
+            <label>DIRECT_REPLY_COOLDOWN_SECONDS
+              <input name="DIRECT_REPLY_COOLDOWN_SECONDS" value="{{ settings.DIRECT_REPLY_COOLDOWN_SECONDS }}">
+            </label>
+          </div>
+          <label>SMALLTALK_REPLY_CHANCE (0.0 - 1.0)
+            <input name="SMALLTALK_REPLY_CHANCE" value="{{ settings.SMALLTALK_REPLY_CHANCE }}" placeholder="0.35">
+          </label>
+          <div class="inline">
+            <label>MEMORY_TTL_SECONDS
+              <input name="MEMORY_TTL_SECONDS" value="{{ settings.MEMORY_TTL_SECONDS }}">
+            </label>
+            <label>ANTI_REPEAT_WINDOW
+              <input name="ANTI_REPEAT_WINDOW" value="{{ settings.ANTI_REPEAT_WINDOW }}">
+            </label>
+          </div>
+          <details>
+            <summary>advanced</summary>
+            <label>MEMORY_DB_PATH
+              <input name="MEMORY_DB_PATH" value="{{ settings.MEMORY_DB_PATH }}">
+            </label>
+            <label>MAX_RECENT_CONTEXT
+              <input name="MAX_RECENT_CONTEXT" value="{{ settings.MAX_RECENT_CONTEXT }}">
+            </label>
+            <label>MAX_EVENTS_PER_USER
+              <input name="MAX_EVENTS_PER_USER" value="{{ settings.MAX_EVENTS_PER_USER }}">
+            </label>
+          </details>
+          <div class="control-row">
+            <button type="submit">save settings</button>
+            <button type="button" id="btn-save-restart">save + restart bot</button>
+          </div>
+          <p id="save-msg" class="muted"></p>
+        </form>
+      </article>
+
+      <article class="card card-span">
+        <h2>monitoring</h2>
+        <div class="stats">
+          <div><span class="k">db</span><span id="db-exists">-</span></div>
+          <div><span class="k">events</span><span id="total-events">-</span></div>
+          <div><span class="k">users</span><span id="total-users">-</span></div>
+          <div><span class="k">replies(24h)</span><span id="replies-24h">-</span></div>
+          <div><span class="k">last event age</span><span id="last-age">-</span></div>
+        </div>
+        <p class="muted" id="db-path">db: -</p>
+        <div class="log-grid">
+          <div>
+            <div class="log-title">memory events</div>
+            <pre id="events-log" class="terminal"></pre>
+          </div>
+          <div>
+            <div class="log-title">bot runtime log</div>
+            <pre id="bot-log" class="terminal"></pre>
+          </div>
+        </div>
+      </article>
+    </section>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>
