@@ -40,6 +40,8 @@ python -m pip install discord.py-self openai python-dotenv flask
 DISCORD_TOKEN=your_discord_token
 OPENROUTER_API_KEY=your_openrouter_api_key
 AI_MODELS=arcee-ai/trinity-large-preview:free
+WEB_UI_USERNAME=admin
+WEB_UI_PASSWORD=change_this_password
 ```
 
 5. Run web panel:
@@ -49,6 +51,7 @@ python web/app.py
 ```
 
 Open `http://127.0.0.1:9799`.
+If `WEB_UI_PASSWORD` is set, browser will prompt Basic Auth login.
 
 6. From web panel:
 - set `CHANNEL_IDS`

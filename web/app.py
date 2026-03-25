@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hmac
 import os
 import signal
 import sqlite3
@@ -9,7 +10,7 @@ import sys
 import time
 from pathlib import Path
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, Response, jsonify, render_template, request
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -18,6 +19,8 @@ SETTINGS_PATH = ROOT / "web_settings.json"
 RUNTIME_DIR = ROOT / "runtime"
 PID_PATH = RUNTIME_DIR / "bot.pid"
 BOT_LOG_PATH = RUNTIME_DIR / "bot.log"
+WEB_UI_USERNAME = (os.getenv("WEB_UI_USERNAME") or "admin").strip() or "admin"
+WEB_UI_PASSWORD = (os.getenv("WEB_UI_PASSWORD") or "").strip()
 
 ENV_EDITABLE_KEYS = [
     "AI_MODELS",
@@ -390,6 +393,36 @@ def _stop_bot() -> dict:
 
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
+
+
+def _web_auth_enabled() -> bool:
+    return bool(WEB_UI_PASSWORD)
+
+
+def _auth_failed_response() -> Response:
+    return Response(
+        "Authentication required",
+        401,
+        {"WWW-Authenticate": 'Basic realm="discord-grint-web-ui"'},
+    )
+
+
+def _is_request_authorized() -> bool:
+    auth = request.authorization
+    if not auth:
+        return False
+    return hmac.compare_digest(auth.username or "", WEB_UI_USERNAME) and hmac.compare_digest(
+        auth.password or "", WEB_UI_PASSWORD
+    )
+
+
+@app.before_request
+def require_web_auth():
+    if not _web_auth_enabled():
+        return None
+    if _is_request_authorized():
+        return None
+    return _auth_failed_response()
 
 
 @app.get("/")
