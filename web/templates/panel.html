@@ -86,9 +86,10 @@
               <span>Daftar Channel (lintas server)</span>
               <button type="button" id="btn-add-map">Tambah Channel</button>
             </div>
-            <p class="hint">Cukup isi Channel ID, pilih Skill, lalu pilih Delay Profile untuk channel itu.</p>
+            <p class="hint">Isi Channel ID + Label (nama bebas), lalu pilih Skill dan Delay Profile.</p>
             <input type="hidden" name="CHANNEL_IDS" id="channel-ids-hidden" value="{{ settings.CHANNEL_IDS }}">
             <input type="hidden" name="CHANNEL_SKILLS" id="channel-skills-hidden" value="{{ settings.CHANNEL_SKILLS }}">
+            <input type="hidden" name="CHANNEL_LABELS" id="channel-labels-hidden" value="{{ settings.CHANNEL_LABELS }}">
             <input type="hidden" name="CHANNEL_PROFILES" id="channel-profiles-hidden" value="{{ settings.CHANNEL_PROFILES }}">
             <input type="hidden" name="CHANNEL_CUSTOM_DELAYS" id="channel-custom-delays-hidden" value="{{ settings.CHANNEL_CUSTOM_DELAYS }}">
             <div id="channel-skill-list" data-skill-options='{{ skill_options|tojson }}' data-profile-options='{{ profile_options|tojson }}'>
@@ -96,6 +97,7 @@
               <div class="map-item">
                 <div class="map-row">
                   <input class="map-channel" placeholder="channel id" value="{{ row.channel_id }}">
+                  <input class="map-label" placeholder="label, contoh: alpha-chat" value="{{ row.label }}">
                   <select class="map-skill">
                     <option value="{{ row.skill }}">{{ row.skill }}</option>
                     {% for skill in skill_options %}
@@ -255,6 +257,7 @@
               <tr>
                 <th>Server</th>
                 <th>Channel</th>
+                <th>Label</th>
                 <th>Events</th>
                 <th>Replies 24h</th>
                 <th>Last Event</th>

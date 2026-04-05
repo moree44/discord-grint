@@ -110,6 +110,7 @@ class SQLiteStore:
         thread_id: int | None,
         keep_last: int,
     ) -> None:
+        keep_last = max(1, int(keep_last))
         with self._connect() as conn:
             if thread_id is not None:
                 conn.execute(
@@ -141,6 +142,7 @@ class SQLiteStore:
                 )
 
     def trim_events_for_user(self, user_id: int, keep_last: int) -> None:
+        keep_last = max(1, int(keep_last))
         with self._connect() as conn:
             conn.execute(
                 """

@@ -172,6 +172,15 @@ def _parse_channel_custom_delays(raw_value) -> dict[int, dict[str, tuple[int, in
                 random_max = int(value.get("random_max"))
             except (TypeError, ValueError):
                 continue
+            if (
+                direct_min < 0
+                or direct_max < 0
+                or keyword_min < 0
+                or keyword_max < 0
+                or random_min < 0
+                or random_max < 0
+            ):
+                continue
             if not (direct_min <= direct_max and keyword_min <= keyword_max and random_min <= random_max):
                 continue
             parsed[int(key_text)] = {
@@ -227,20 +236,34 @@ def _parse_channel_custom_delays(raw_value) -> dict[int, dict[str, tuple[int, in
     return mapping
 
 
-def _int_setting(name: str, default: int) -> int:
+def _int_setting(name: str, default: int, *, minimum: int | None = None) -> int:
     raw = _get_setting(name, default)
     try:
-        return int(raw)
+        value = int(raw)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{name} must be an integer") from exc
+    if minimum is not None and value < minimum:
+        raise ValueError(f"{name} must be >= {minimum}")
+    return value
 
 
-def _float_setting(name: str, default: float) -> float:
+def _float_setting(
+    name: str,
+    default: float,
+    *,
+    minimum: float | None = None,
+    maximum: float | None = None,
+) -> float:
     raw = _get_setting(name, default)
     try:
-        return float(raw)
+        value = float(raw)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{name} must be a float") from exc
+    if minimum is not None and value < minimum:
+        raise ValueError(f"{name} must be >= {minimum}")
+    if maximum is not None and value > maximum:
+        raise ValueError(f"{name} must be <= {maximum}")
+    return value
 
 
 def _parse_csv_list(raw_value) -> list[str]:
@@ -423,25 +446,25 @@ def load_settings() -> AppSettings:
     profiles = {
         "normal": ReplyProfile(
             chance={
-                "keyword_hit": _float_setting("KEYWORD_REPLY_CHANCE", 0.50),
-                "random": _float_setting("RANDOM_REPLY_CHANCE", 0.20),
+                "keyword_hit": _float_setting("KEYWORD_REPLY_CHANCE", 0.50, minimum=0.0, maximum=1.0),
+                "random": _float_setting("RANDOM_REPLY_CHANCE", 0.20, minimum=0.0, maximum=1.0),
             },
             delays={
                 "replied_to_us": (
-                    _int_setting("DELAY_DIRECT_MIN", 16),
-                    _int_setting("DELAY_DIRECT_MAX", 30),
+                    _int_setting("DELAY_DIRECT_MIN", 16, minimum=0),
+                    _int_setting("DELAY_DIRECT_MAX", 30, minimum=0),
                 ),
                 "mentioned": (
-                    _int_setting("DELAY_DIRECT_MIN", 16),
-                    _int_setting("DELAY_DIRECT_MAX", 30),
+                    _int_setting("DELAY_DIRECT_MIN", 16, minimum=0),
+                    _int_setting("DELAY_DIRECT_MAX", 30, minimum=0),
                 ),
                 "keyword_hit": (
-                    _int_setting("DELAY_KEYWORD_MIN", 30),
-                    _int_setting("DELAY_KEYWORD_MAX", 90),
+                    _int_setting("DELAY_KEYWORD_MIN", 30, minimum=0),
+                    _int_setting("DELAY_KEYWORD_MAX", 90, minimum=0),
                 ),
                 "random": (
-                    _int_setting("DELAY_RANDOM_MIN", 45),
-                    _int_setting("DELAY_RANDOM_MAX", 120),
+                    _int_setting("DELAY_RANDOM_MIN", 45, minimum=0),
+                    _int_setting("DELAY_RANDOM_MAX", 120, minimum=0),
                 ),
             },
         ),
@@ -527,19 +550,19 @@ def load_settings() -> AppSettings:
 
     memory = MemorySettings(
         db_path=str(_get_setting("MEMORY_DB_PATH", "storage/memories.db")),
-        event_ttl_seconds=_int_setting("MEMORY_TTL_SECONDS", 21600),
-        max_recent_context=_int_setting("MAX_RECENT_CONTEXT", 40),
-        max_events_per_user=_int_setting("MAX_EVENTS_PER_USER", 120),
-        anti_repeat_window=_int_setting("ANTI_REPEAT_WINDOW", 8),
+        event_ttl_seconds=_int_setting("MEMORY_TTL_SECONDS", 21600, minimum=0),
+        max_recent_context=_int_setting("MAX_RECENT_CONTEXT", 40, minimum=1),
+        max_events_per_user=_int_setting("MAX_EVENTS_PER_USER", 120, minimum=1),
+        anti_repeat_window=_int_setting("ANTI_REPEAT_WINDOW", 8, minimum=1),
     )
 
     agent = AgentSettings(
-        random_cooldown_seconds=_int_setting("RANDOM_COOLDOWN_SECONDS", 45),
-        direct_reply_cooldown_seconds=_int_setting("DIRECT_REPLY_COOLDOWN_SECONDS", 12),
-        smalltalk_reply_chance=_float_setting("SMALLTALK_REPLY_CHANCE", 0.35),
-        proactive_interval_minutes=_int_setting("PROACTIVE_INTERVAL_MINUTES", 10),
-        proactive_min_messages=_int_setting("PROACTIVE_MIN_MESSAGES", 3),
-        proactive_chance=_float_setting("PROACTIVE_CHANCE", 0.50),
+        random_cooldown_seconds=_int_setting("RANDOM_COOLDOWN_SECONDS", 45, minimum=0),
+        direct_reply_cooldown_seconds=_int_setting("DIRECT_REPLY_COOLDOWN_SECONDS", 12, minimum=0),
+        smalltalk_reply_chance=_float_setting("SMALLTALK_REPLY_CHANCE", 0.35, minimum=0.0, maximum=1.0),
+        proactive_interval_minutes=_int_setting("PROACTIVE_INTERVAL_MINUTES", 10, minimum=0),
+        proactive_min_messages=_int_setting("PROACTIVE_MIN_MESSAGES", 3, minimum=1),
+        proactive_chance=_float_setting("PROACTIVE_CHANCE", 0.50, minimum=0.0, maximum=1.0),
     )
 
     return AppSettings(

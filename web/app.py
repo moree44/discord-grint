@@ -34,6 +34,7 @@ WEB_EDITABLE_KEYS = [
     "CHANNEL_SKILLS",
     "CHANNEL_PROFILES",
     "CHANNEL_CUSTOM_DELAYS",
+    "CHANNEL_LABELS",
     "CHANNEL_IDS",
     "DEFAULT_SKILL",
     "MEMORY_DB_PATH",
@@ -58,6 +59,7 @@ DEFAULT_WEB_SETTINGS = {
     "CHANNEL_SKILLS": "",
     "CHANNEL_PROFILES": "",
     "CHANNEL_CUSTOM_DELAYS": "",
+    "CHANNEL_LABELS": "",
     "CHANNEL_IDS": "",
     "DEFAULT_SKILL": "donut_browser",
     "MEMORY_DB_PATH": "storage/memories.db",
@@ -92,6 +94,21 @@ INT_SETTING_KEYS = {
     "DELAY_KEYWORD_MAX",
     "DELAY_RANDOM_MIN",
     "DELAY_RANDOM_MAX",
+}
+
+INT_SETTING_MINIMUMS = {
+    "MEMORY_TTL_SECONDS": 0,
+    "MAX_RECENT_CONTEXT": 1,
+    "MAX_EVENTS_PER_USER": 1,
+    "ANTI_REPEAT_WINDOW": 1,
+    "RANDOM_COOLDOWN_SECONDS": 0,
+    "DIRECT_REPLY_COOLDOWN_SECONDS": 0,
+    "DELAY_DIRECT_MIN": 0,
+    "DELAY_DIRECT_MAX": 0,
+    "DELAY_KEYWORD_MIN": 0,
+    "DELAY_KEYWORD_MAX": 0,
+    "DELAY_RANDOM_MIN": 0,
+    "DELAY_RANDOM_MAX": 0,
 }
 
 FLOAT_SETTING_KEYS = {
@@ -176,6 +193,23 @@ def _parse_channel_custom_delays_map(raw: str | None) -> dict[str, dict[str, int
     return mapping
 
 
+def _parse_channel_labels_map(raw: str | None) -> dict[str, str]:
+    mapping: dict[str, str] = {}
+    if not raw:
+        return mapping
+    for part in str(raw).split(","):
+        token = part.strip()
+        if not token or ":" not in token:
+            continue
+        channel_id, label = token.split(":", 1)
+        channel_id = channel_id.strip()
+        label = label.strip()
+        if not channel_id or not label:
+            continue
+        mapping[channel_id] = label
+    return mapping
+
+
 def _format_channel_custom_delays_map(items: list[dict[str, str]]) -> str:
     chunks: list[str] = []
     for item in items:
@@ -213,6 +247,17 @@ def _format_channel_profiles_map(items: list[dict[str, str]]) -> str:
     return ",".join(chunks)
 
 
+def _format_channel_labels_map(items: list[dict[str, str]]) -> str:
+    chunks: list[str] = []
+    for item in items:
+        channel_id = str(item.get("channel_id", "")).strip()
+        label = str(item.get("label", "")).strip()
+        if not channel_id or not label:
+            continue
+        chunks.append(f"{channel_id}:{label}")
+    return ",".join(chunks)
+
+
 def _parse_channel_ids_list(raw: str | None) -> list[str]:
     if not raw:
         return []
@@ -229,8 +274,10 @@ def _build_channel_route_rows(values: dict[str, str]) -> list[dict[str, str]]:
     skill_rows = _parse_channel_skills_map(values.get("CHANNEL_SKILLS"))
     profile_map = _parse_channel_profiles_map(values.get("CHANNEL_PROFILES"))
     custom_delay_map = _parse_channel_custom_delays_map(values.get("CHANNEL_CUSTOM_DELAYS"))
+    label_map = _parse_channel_labels_map(values.get("CHANNEL_LABELS"))
 
     channel_ids.update(item["channel_id"] for item in skill_rows if item.get("channel_id"))
+    channel_ids.update(label_map.keys())
     channel_ids.update(profile_map.keys())
     channel_ids.update(custom_delay_map.keys())
 
@@ -238,11 +285,15 @@ def _build_channel_route_rows(values: dict[str, str]) -> list[dict[str, str]]:
     default_skill = str(values.get("DEFAULT_SKILL") or DEFAULT_WEB_SETTINGS["DEFAULT_SKILL"]).strip()
 
     rows: list[dict[str, str]] = []
-    for channel_id in sorted(channel_ids, key=lambda x: int(x) if x.isdigit() else x):
+    for channel_id in sorted(
+        channel_ids,
+        key=lambda x: (0, int(x)) if x.isdigit() else (1, x),
+    ):
         custom_delay = custom_delay_map.get(channel_id) or {}
         rows.append(
             {
                 "channel_id": channel_id,
+                "label": label_map.get(channel_id, ""),
                 "skill": skill_by_channel.get(channel_id, default_skill),
                 "profile": profile_map.get(channel_id, "normal"),
                 "custom_enabled": "1" if custom_delay else "",
@@ -361,6 +412,26 @@ def _validate_channel_skills(raw: str) -> None:
             raise ValueError("CHANNEL_SKILLS skill cannot be empty")
 
 
+def _validate_channel_labels(raw: str) -> None:
+    text = str(raw).strip()
+    if not text:
+        return
+    for part in text.split(","):
+        item = part.strip()
+        if not item:
+            continue
+        if ":" not in item:
+            raise ValueError("CHANNEL_LABELS must use channel_id:label format")
+        channel_id, label = item.split(":", 1)
+        if not channel_id.strip().isdigit():
+            raise ValueError("CHANNEL_LABELS channel id must be numeric")
+        label_text = label.strip()
+        if not label_text:
+            raise ValueError("CHANNEL_LABELS label cannot be empty")
+        if "," in label_text or ":" in label_text:
+            raise ValueError("CHANNEL_LABELS label cannot contain ',' or ':'")
+
+
 def _validate_channel_profiles(raw: str) -> None:
     text = str(raw).strip()
     if not text:
@@ -416,7 +487,11 @@ def _validate_web_updates(web_updates: dict) -> None:
         raw = str(web_updates[key]).strip()
         if raw == "":
             raise ValueError(f"{key} cannot be empty")
-        int_values[key] = int(raw)
+        parsed = int(raw)
+        minimum = INT_SETTING_MINIMUMS.get(key)
+        if minimum is not None and parsed < minimum:
+            raise ValueError(f"{key} must be >= {minimum}")
+        int_values[key] = parsed
 
     for key in FLOAT_SETTING_KEYS:
         if key not in web_updates:
@@ -432,6 +507,8 @@ def _validate_web_updates(web_updates: dict) -> None:
         _validate_channel_ids(str(web_updates["CHANNEL_IDS"]))
     if "CHANNEL_SKILLS" in web_updates:
         _validate_channel_skills(str(web_updates["CHANNEL_SKILLS"]))
+    if "CHANNEL_LABELS" in web_updates:
+        _validate_channel_labels(str(web_updates["CHANNEL_LABELS"]))
     if "CHANNEL_PROFILES" in web_updates:
         _validate_channel_profiles(str(web_updates["CHANNEL_PROFILES"]))
     if "CHANNEL_CUSTOM_DELAYS" in web_updates:
@@ -602,6 +679,10 @@ def _discover_project_skills() -> list[str]:
             if path.parent.name == "skills":
                 names.add(path.stem)
     return sorted(names)
+
+
+def _channel_labels_by_id(values: dict[str, str]) -> dict[str, str]:
+    return _parse_channel_labels_map(values.get("CHANNEL_LABELS"))
 
 
 def _tail_log(path: Path, max_lines: int = 120) -> list[str]:
@@ -854,6 +935,7 @@ def api_status():
             "log_tail": _tail_log(BOT_LOG_PATH, max_lines=120),
             "skill_options": _discover_project_skills(),
             "channel_route_rows": _build_channel_route_rows(values),
+            "channel_labels": _channel_labels_by_id(values),
             "profile_options": PROFILE_OPTIONS,
         }
     )
@@ -876,6 +958,7 @@ def api_settings():
         ]
         web_updates["CHANNEL_IDS"] = ",".join(list(dict.fromkeys(channel_ids)))
         web_updates["CHANNEL_SKILLS"] = _format_channel_skills_map(route_rows)
+        web_updates["CHANNEL_LABELS"] = _format_channel_labels_map(route_rows)
         web_updates["CHANNEL_PROFILES"] = _format_channel_profiles_map(route_rows)
         web_updates["CHANNEL_CUSTOM_DELAYS"] = _format_channel_custom_delays_map(route_rows)
 

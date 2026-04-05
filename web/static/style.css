@@ -210,7 +210,7 @@ summary {
 
 .map-row {
   display: grid;
-  grid-template-columns: 1.1fr 1fr 0.9fr auto auto;
+  grid-template-columns: 1.1fr 1fr 1fr 0.9fr auto auto;
   gap: 8px;
   margin-bottom: 0;
 }

@@ -26,6 +26,7 @@ function escapeHtml(text) {
 const REFRESH_INTERVAL_MS = 4000;
 let refreshTimer = null;
 let lastChannelRows = [];
+let lastChannelLabels = {};
 let channelFilterText = "";
 
 async function postJSON(url, payload = {}) {
@@ -46,7 +47,7 @@ function setControlMessage(text) {
   if (node) node.textContent = text;
 }
 
-function createMapRow(channelId = "", selectedSkill = "", selectedProfile = "normal") {
+function createMapRow(channelId = "", channelLabel = "", selectedSkill = "", selectedProfile = "normal") {
   const list = el("channel-skill-list");
   const skillOptions = JSON.parse(list.dataset.skillOptions || "[]");
   const profileOptions = JSON.parse(list.dataset.profileOptions || "[]");
@@ -59,6 +60,11 @@ function createMapRow(channelId = "", selectedSkill = "", selectedProfile = "nor
   input.className = "map-channel";
   input.placeholder = "contoh: 123456789";
   input.value = channelId;
+
+  const labelInput = document.createElement("input");
+  labelInput.className = "map-label";
+  labelInput.placeholder = "label channel";
+  labelInput.value = channelLabel;
 
   const select = document.createElement("select");
   select.className = "map-skill";
@@ -132,10 +138,12 @@ function createMapRow(channelId = "", selectedSkill = "", selectedProfile = "nor
   });
 
   input.addEventListener("input", syncChannelSkillHidden);
+  labelInput.addEventListener("input", syncChannelSkillHidden);
   select.addEventListener("change", syncChannelSkillHidden);
   profile.addEventListener("change", syncChannelSkillHidden);
 
   row.appendChild(input);
+  row.appendChild(labelInput);
   row.appendChild(select);
   row.appendChild(profile);
   row.appendChild(customToggleWrap);
@@ -150,6 +158,7 @@ function syncChannelSkillHidden() {
   const mapped = items
     .map((item) => {
       const channel = item.querySelector(".map-channel")?.value?.trim() || "";
+      const label = item.querySelector(".map-label")?.value?.trim() || "";
       const skill = item.querySelector(".map-skill")?.value?.trim() || "";
       const profile = item.querySelector(".map-profile")?.value?.trim() || "normal";
       const customEnabled = !!item.querySelector(".map-custom-enabled")?.checked;
@@ -161,6 +170,7 @@ function syncChannelSkillHidden() {
       const randomMax = item.querySelector(".map-random-max")?.value?.trim() || "";
       return {
         channel,
+        label,
         skill,
         profile,
         customEnabled,
@@ -179,6 +189,12 @@ function syncChannelSkillHidden() {
   }
   if (el("channel-skills-hidden")) {
     el("channel-skills-hidden").value = mapped.map((x) => `${x.channel}:${x.skill}`).join(",");
+  }
+  if (el("channel-labels-hidden")) {
+    el("channel-labels-hidden").value = mapped
+      .filter((x) => x.label)
+      .map((x) => `${x.channel}:${x.label}`)
+      .join(",");
   }
   if (el("channel-profiles-hidden")) {
     el("channel-profiles-hidden").value = mapped.map((x) => `${x.channel}:${x.profile}`).join(",");
@@ -319,11 +335,12 @@ function updateDelayPresetUI() {
   hint.textContent = DELAY_PRESETS[selected]?.hint || "Pilih preset untuk isi otomatis nilai delay.";
 }
 
-function renderChannelBreakdown(items) {
+function renderChannelBreakdown(items, channelLabels = {}) {
   const body = el("scope-summary-body");
   if (!body) return;
   const rows = Array.isArray(items) ? items : [];
   lastChannelRows = rows;
+  lastChannelLabels = channelLabels || {};
   const filter = channelFilterText.trim().toLowerCase();
   const filteredRows = filter
     ? rows.filter((item) => {
@@ -338,7 +355,7 @@ function renderChannelBreakdown(items) {
     rowCountNode.textContent = `${filteredRows.length}/${rows.length}`;
   }
   if (!filteredRows.length) {
-    body.innerHTML = '<tr><td colspan="5">Belum ada data channel.</td></tr>';
+    body.innerHTML = '<tr><td colspan="6">Belum ada data channel.</td></tr>';
     return;
   }
 
@@ -346,12 +363,14 @@ function renderChannelBreakdown(items) {
     .map((item) => {
       const server = item.guild_id === null || item.guild_id === undefined ? "DM/Unknown" : String(item.guild_id);
       const channel = String(item.channel_id || "-");
+      const label = channelLabels[channel] || "-";
       const total = String(item.total_events || 0);
       const replies = String(item.bot_replies_24h || 0);
       const lastTs = item.last_event_ts ? fmtTs(item.last_event_ts) : "-";
       return `<tr>
         <td>${escapeHtml(server)}</td>
         <td>${escapeHtml(channel)}</td>
+        <td>${escapeHtml(label)}</td>
         <td>${escapeHtml(total)}</td>
         <td>${escapeHtml(replies)}</td>
         <td>${escapeHtml(lastTs)}</td>
@@ -384,7 +403,8 @@ async function refreshStatus() {
     if (replies24h) replies24h.textContent = data.bot_replies_24h;
     if (lastAge) lastAge.textContent = fmtAge(data.last_event_age_sec);
     if (dbPath) dbPath.textContent = data.error ? `db error: ${data.error}` : `db: ${data.db_path}`;
-    renderChannelBreakdown(data.channel_breakdown);
+    const channelLabels = data.channel_labels || {};
+    renderChannelBreakdown(data.channel_breakdown, channelLabels);
     const lastEventNode = el("last-event-at");
     if (lastEventNode) lastEventNode.textContent = fmtTs(data.last_event_ts);
 
@@ -394,7 +414,15 @@ async function refreshStatus() {
       .sort((a, b) => (Number(b.bot_replies_24h || 0) - Number(a.bot_replies_24h || 0)))[0];
     const topNode = el("top-channel-24h");
     if (topNode) {
-      topNode.textContent = top ? `${top.channel_id} (${top.bot_replies_24h})` : "-";
+      if (top) {
+        const channelId = String(top.channel_id || "-");
+        const label = channelLabels[channelId];
+        topNode.textContent = label
+          ? `${label} [${channelId}] (${top.bot_replies_24h})`
+          : `${channelId} (${top.bot_replies_24h})`;
+      } else {
+        topNode.textContent = "-";
+      }
     }
     const summaryNode = el("monitoring-summary");
     if (summaryNode) {
@@ -424,6 +452,7 @@ async function saveSettings() {
   const payload = Object.fromEntries(new FormData(form).entries());
   const rows = syncChannelSkillHidden().map((x) => ({
     channel_id: x.channel,
+    label: x.label,
     skill: x.skill,
     profile: x.profile,
     custom_enabled: x.customEnabled ? "1" : "",
@@ -495,7 +524,7 @@ if (el("btn-save-restart")) {
   el("btn-save-restart").addEventListener("click", saveAndRestart);
 }
 if (el("btn-add-map")) {
-  el("btn-add-map").addEventListener("click", () => createMapRow("", "", "normal"));
+  el("btn-add-map").addEventListener("click", () => createMapRow("", "", "", "normal"));
 }
 
 Array.from(document.querySelectorAll(".map-row")).forEach((row) => {
@@ -505,6 +534,7 @@ Array.from(document.querySelectorAll(".map-row")).forEach((row) => {
     syncChannelSkillHidden();
   });
   row.querySelector(".map-channel")?.addEventListener("input", syncChannelSkillHidden);
+  row.querySelector(".map-label")?.addEventListener("input", syncChannelSkillHidden);
   row.querySelector(".map-skill")?.addEventListener("change", syncChannelSkillHidden);
   row.querySelector(".map-profile")?.addEventListener("change", syncChannelSkillHidden);
   const enabled = item?.querySelector(".map-custom-enabled");
@@ -517,7 +547,13 @@ Array.from(document.querySelectorAll(".map-row")).forEach((row) => {
     input.addEventListener("input", syncChannelSkillHidden);
   });
 });
-if (el("channel-skills-hidden") && el("channel-ids-hidden") && el("channel-profiles-hidden") && el("channel-custom-delays-hidden")) {
+if (
+  el("channel-skills-hidden")
+  && el("channel-ids-hidden")
+  && el("channel-labels-hidden")
+  && el("channel-profiles-hidden")
+  && el("channel-custom-delays-hidden")
+) {
   syncChannelSkillHidden();
 }
 
@@ -611,10 +647,10 @@ if (refreshNowBtn) {
 }
 
 const filterInput = el("channel-filter");
-if (filterInput) {
+  if (filterInput) {
   filterInput.addEventListener("input", () => {
     channelFilterText = filterInput.value || "";
-    renderChannelBreakdown(lastChannelRows);
+    renderChannelBreakdown(lastChannelRows, lastChannelLabels);
   });
 }
 
