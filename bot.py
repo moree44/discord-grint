@@ -14,9 +14,15 @@ from openai import AsyncOpenAI
 
 from agent.classifier import classify_message
 from agent.critic import critique_reply
-from agent.generator import build_system_prompt, build_user_prompt, generate_reply
+from agent.generator import (
+    build_proactive_prompt,
+    build_system_prompt,
+    build_user_prompt,
+    detect_message_language,
+    generate_reply,
+)
 from agent.planner import plan_reply
-from config import SETTINGS, resolve_channel_config
+from config import load_settings, resolve_channel_config
 from memory.event_store import EventScope, EventStore
 from memory.recent_context import RecentContextCache
 from memory.user_profile import UserProfileStore
@@ -24,7 +30,10 @@ from storage.sqlite_store import SQLiteStore
 
 load_dotenv()
 
-TARGET_CHANNELS = SETTINGS.routing.watched_channel_ids
+_CONFIG_FILES = (Path(".env"), Path("web_settings.json"))
+_CONFIG_RELOAD_INTERVAL_SECONDS = 3
+_CONFIG_RELOAD_TASK: asyncio.Task | None = None
+_PROACTIVE_TASK: asyncio.Task | None = None
 CRYPTO_SIGNAL_TERMS = (
     "token",
     "airdrop",
@@ -48,20 +57,39 @@ if hasattr(discord, "Intents"):
 else:
     client = discord.Client(self_bot=True)
 
-ai = AsyncOpenAI(
-    base_url="https://openrouter.ai/api/v1",
-    api_key=SETTINGS.credentials.openrouter_key,
-)
+_CURRENT_SETTINGS = load_settings()
+TARGET_CHANNELS = _CURRENT_SETTINGS.routing.watched_channel_ids
 
-sqlite_store = SQLiteStore(SETTINGS.memory.db_path)
+
+def _build_ai_client(api_key: str | None) -> AsyncOpenAI:
+    return AsyncOpenAI(
+        base_url="https://openrouter.ai/api/v1",
+        api_key=api_key,
+    )
+
+
+def _capture_config_state() -> tuple[tuple[str, float | None], ...]:
+    state: list[tuple[str, float | None]] = []
+    for path in _CONFIG_FILES:
+        if path.exists():
+            state.append((str(path), path.stat().st_mtime))
+        else:
+            state.append((str(path), None))
+    return tuple(state)
+
+
+ai = _build_ai_client(_CURRENT_SETTINGS.credentials.openrouter_key)
+sqlite_store = SQLiteStore(_CURRENT_SETTINGS.memory.db_path)
 event_store = EventStore(
     sqlite_store,
-    ttl_seconds=SETTINGS.memory.event_ttl_seconds,
-    max_recent_context=SETTINGS.memory.max_recent_context,
-    max_events_per_user=SETTINGS.memory.max_events_per_user,
+    ttl_seconds=_CURRENT_SETTINGS.memory.event_ttl_seconds,
+    max_recent_context=_CURRENT_SETTINGS.memory.max_recent_context,
+    max_events_per_user=_CURRENT_SETTINGS.memory.max_events_per_user,
 )
-recent_context = RecentContextCache(max_items=SETTINGS.memory.max_recent_context)
+recent_context = RecentContextCache(max_items=_CURRENT_SETTINGS.memory.max_recent_context)
 user_profiles = UserProfileStore(sqlite_store)
+_CONFIG_STATE = _capture_config_state()
+_SETTINGS_RELOAD_LOCK = asyncio.Lock()
 _INSTANCE_LOCK_FILE = None
 _SEEN_MESSAGE_IDS: set[int] = set()
 _SEEN_MESSAGE_ORDER: deque[int] = deque(maxlen=4000)
@@ -92,18 +120,269 @@ def _is_duplicate_message(message_id: int) -> bool:
     return False
 
 
-def passes_basic_filters(message, allow_short_message: bool = False):
+def passes_basic_filters(message, settings, allow_short_message: bool = False):
     if message.author.bot:
         return False, "author_is_bot"
     if not message.content:
         return False, "empty_content"
-    if not allow_short_message and len(message.content) < SETTINGS.filters.min_message_length:
+    if not allow_short_message and len(message.content) < settings.filters.min_message_length:
         return False, "too_short"
-    if message.content.startswith(SETTINGS.filters.skip_prefixes):
+    if message.content.startswith(settings.filters.skip_prefixes):
         return False, "prefixed_command"
     if re.match(r"^[\W\d\s]+$", message.content):
         return False, "non_textual"
     return True, None
+
+
+async def _maybe_reload_settings(*, force: bool = False) -> None:
+    global _CURRENT_SETTINGS
+    global TARGET_CHANNELS
+    global ai
+    global sqlite_store
+    global event_store
+    global recent_context
+    global user_profiles
+    global _CONFIG_STATE
+
+    async with _SETTINGS_RELOAD_LOCK:
+        current_state = _capture_config_state()
+        if not force and current_state == _CONFIG_STATE:
+            return
+
+        old_settings = _CURRENT_SETTINGS
+        try:
+            new_settings = load_settings()
+        except Exception as exc:
+            print(f"⚠️  Config reload failed: {exc}")
+            return
+
+        _CURRENT_SETTINGS = new_settings
+        TARGET_CHANNELS = new_settings.routing.watched_channel_ids
+
+        if old_settings.credentials.openrouter_key != new_settings.credentials.openrouter_key:
+            ai = _build_ai_client(new_settings.credentials.openrouter_key)
+
+        if old_settings.memory.db_path != new_settings.memory.db_path:
+            sqlite_store = SQLiteStore(new_settings.memory.db_path)
+            user_profiles = UserProfileStore(sqlite_store)
+            event_store = EventStore(
+                sqlite_store,
+                ttl_seconds=new_settings.memory.event_ttl_seconds,
+                max_recent_context=new_settings.memory.max_recent_context,
+                max_events_per_user=new_settings.memory.max_events_per_user,
+            )
+            recent_context = RecentContextCache(max_items=new_settings.memory.max_recent_context)
+            print(f"🔄 Config reloaded: memory DB path -> {new_settings.memory.db_path}")
+        else:
+            event_store.ttl_seconds = new_settings.memory.event_ttl_seconds
+            event_store.max_recent_context = new_settings.memory.max_recent_context
+            event_store.max_events_per_user = new_settings.memory.max_events_per_user
+            if recent_context.max_items != new_settings.memory.max_recent_context:
+                recent_context = RecentContextCache(max_items=new_settings.memory.max_recent_context)
+
+        _CONFIG_STATE = current_state
+        print(
+            "🔄 Config reloaded: "
+            f"channels={len(TARGET_CHANNELS)}, model={','.join(new_settings.ai.models[:2])}"
+        )
+
+
+async def _config_reload_loop() -> None:
+    while True:
+        await asyncio.sleep(_CONFIG_RELOAD_INTERVAL_SECONDS)
+        await _maybe_reload_settings()
+
+
+def _normalize_text(content: str) -> str:
+    return re.sub(r"\s+", " ", content).strip().lower()
+
+
+def _contains_backoff_signal(context_lines: list[str], bot_name: str | None) -> bool:
+    signals = (
+        "stop", "stop dulu", "diam", "jangan spam", "spam", "berisik",
+        "quiet", "be quiet", "too much", "mute", "shut up", "no bot",
+    )
+    for raw_line in context_lines[-14:]:
+        line = raw_line.strip()
+        if not line:
+            continue
+        if bot_name and line.lower().startswith(f"{bot_name.lower()}:"):
+            continue
+        lowered = _normalize_text(line)
+        if any(token in lowered for token in signals):
+            return True
+    return False
+
+
+def _detect_crypto_context(context_lines: list[str]) -> bool:
+    if not context_lines:
+        return False
+    sample = _normalize_text(" ".join(context_lines[-16:]))
+    if "crypto" in sample:
+        return True
+    return any(term in sample for term in CRYPTO_SIGNAL_TERMS)
+
+
+def _language_hint_from_context(context_lines: list[str]) -> str:
+    if not context_lines:
+        return "Mirror the latest users naturally."
+    text = " ".join(context_lines[-12:])
+    detected = detect_message_language(text)
+    if detected == "id":
+        return "Mostly Indonesian, casual community tone."
+    if detected == "en":
+        return "Mostly English, casual community tone."
+    return "Mixed language is okay; mirror the latest crowd naturally."
+
+
+def _build_proactive_chance(
+    *,
+    base_chance: float,
+    user_messages_recent: int,
+    min_messages: int,
+    latest_bot_reply_ts: int | None,
+    now_ts: int,
+    resolved_profile,
+    settings,
+    has_backoff_signal: bool,
+) -> float:
+    safe_min = max(1, min_messages)
+    activity_factor = min(1.9, 0.65 + (user_messages_recent / (safe_min * 1.6)))
+    profile_random_chance = float(resolved_profile.chance.get("random", 0.2))
+    profile_factor = min(1.5, max(0.55, profile_random_chance / 0.2))
+
+    cooldown_factor = 1.0
+    if latest_bot_reply_ts:
+        age = max(0, now_ts - latest_bot_reply_ts)
+        if age < settings.agent.direct_reply_cooldown_seconds:
+            cooldown_factor = 0.2
+        elif age < settings.agent.random_cooldown_seconds:
+            cooldown_factor = 0.5
+
+    backoff_factor = 0.35 if has_backoff_signal else 1.0
+    tuned = base_chance * activity_factor * profile_factor * cooldown_factor * backoff_factor
+    return max(0.02, min(0.95, tuned))
+
+
+async def _proactive_chat_loop() -> None:
+    import time
+    while True:
+        try:
+            settings = _CURRENT_SETTINGS
+            wait_time = settings.agent.proactive_interval_minutes * 60
+            if wait_time <= 0:
+                await asyncio.sleep(60)
+                continue
+
+            await asyncio.sleep(wait_time)
+
+            now_ts = int(time.time())
+            since_ts = now_ts - wait_time
+
+            for ch_id in TARGET_CHANNELS:
+                ch = client.get_channel(ch_id)
+                if not ch:
+                    continue
+
+                guild_id = ch.guild.id if getattr(ch, "guild", None) else None
+                scope = EventScope(guild_id=guild_id, channel_id=ch_id, thread_id=None)
+                resolved = resolve_channel_config(settings, guild_id, ch_id)
+                if not resolved.enabled:
+                    continue
+
+                recent_user_count = event_store.count_recent_user_messages(
+                    scope=scope,
+                    since_ts=since_ts,
+                    limit=80,
+                )
+                if recent_user_count < settings.agent.proactive_min_messages:
+                    continue
+
+                db_context = event_store.get_recent_context(scope=scope, limit=settings.ai.history_limit)
+                if not db_context:
+                    continue
+
+                bot_name = str(client.user.display_name) if client.user else "bot"
+                has_backoff_signal = _contains_backoff_signal(db_context, bot_name)
+                latest_bot_ts = event_store.latest_bot_reply_ts(scope)
+                tuned_chance = _build_proactive_chance(
+                    base_chance=settings.agent.proactive_chance,
+                    user_messages_recent=recent_user_count,
+                    min_messages=settings.agent.proactive_min_messages,
+                    latest_bot_reply_ts=latest_bot_ts,
+                    now_ts=now_ts,
+                    resolved_profile=resolved.profile,
+                    settings=settings,
+                    has_backoff_signal=has_backoff_signal,
+                )
+                if random.random() > tuned_chance:
+                    continue
+
+                is_crypto_context = _detect_crypto_context(db_context)
+                language_hint = _language_hint_from_context(db_context)
+                crowd_hint = (
+                    "Users recently asked to slow down bot chatter."
+                    if has_backoff_signal
+                    else "Channel is active; chime in only if it adds value."
+                )
+                print(
+                    f"👁️ [{resolved.profile_name}] Proactive check in "
+                    f"#{getattr(ch, 'name', str(ch_id))} | active={recent_user_count} chance={tuned_chance:.2f}"
+                )
+
+                system_prompt = build_system_prompt(resolved.skill, is_crypto=is_crypto_context)
+                proactive_prompt = build_proactive_prompt(
+                    recent_context=db_context,
+                    language_hint=language_hint,
+                    crowd_hint=crowd_hint,
+                )
+
+                generation = await generate_reply(
+                    ai=ai,
+                    models_to_try=settings.ai.models or ["arcee-ai/trinity-large-preview:free"],
+                    system_prompt=system_prompt,
+                    user_prompt=proactive_prompt,
+                    max_tokens=settings.ai.max_tokens_chime_in,
+                    temperature=settings.ai.temperature,
+                    retries=2,
+                )
+
+                reply_text = generation.text
+                normalized_ignore = (
+                    re.sub(r"[^A-Za-z]", "", reply_text).upper()
+                    if reply_text
+                    else ""
+                )
+                if not reply_text or normalized_ignore in {"IGNORE", "IGNORECHAT"}:
+                    print("🔇 Proactive observer decided to stay quiet.")
+                    continue
+
+                print(f"💬 [Proactive|{resolved.profile_name}] Chime in -> {reply_text[:50]}...")
+
+                try:
+                    await ch.send(reply_text)
+                    recent_context.remember(
+                        channel_id=scope.channel_id,
+                        thread_id=scope.thread_id,
+                        author_name=bot_name,
+                        content=reply_text,
+                    )
+                    event_store.add_event(
+                        scope=scope,
+                        user_id=client.user.id if client.user else None,
+                        author_name=bot_name,
+                        event_type="bot_reply",
+                        content=reply_text,
+                        metadata={"mode": "proactive", "delay_type": "proactive"},
+                    )
+                except Exception as e:
+                    print(f"❌ Proactive send failed: {e}")
+
+                break
+
+        except Exception as e:
+            print(f"❌ Proactive loop error: {e}")
+            await asyncio.sleep(60)
 
 
 def _quick_smalltalk_reply(message_content: str) -> str | None:
@@ -111,7 +390,8 @@ def _quick_smalltalk_reply(message_content: str) -> str | None:
     text = text.replace(",", "").replace(".", "").replace("!", "").replace("?", "")
     if not text:
         return None
-    if any(greet in text for greet in ("good morning", "morning", "gm", "gdonut", "hello", "hi")):
+    greeting_terms = ("good morning", "morning", "gm", "gdonut", "hello", "hi")
+    if any(re.search(rf"\b{re.escape(greet)}\b", text) for greet in greeting_terms):
         return random.choice(["gm", "morning bro", "hey bro", "hey"])
     if "how are you" in text or "how you doing" in text or "wby" in text:
         return random.choice(["i dey alright, you?", "doing good, you?", "i'm good bro"])
@@ -176,10 +456,20 @@ async def safe_reply(message, text: str) -> bool:
 
 @client.event
 async def on_ready():
+    global _CONFIG_RELOAD_TASK, _PROACTIVE_TASK
+    await _maybe_reload_settings(force=True)
+    settings = _CURRENT_SETTINGS
+
+    if _CONFIG_RELOAD_TASK is None or _CONFIG_RELOAD_TASK.done():
+        _CONFIG_RELOAD_TASK = asyncio.create_task(_config_reload_loop())
+    
+    if _PROACTIVE_TASK is None or _PROACTIVE_TASK.done():
+        _PROACTIVE_TASK = asyncio.create_task(_proactive_chat_loop())
+
     print(f"\n{'='*45}")
     print(f"  ✅ Logged in as : {client.user}")
     print(f"  📡 Watching     : {len(TARGET_CHANNELS)} channel(s)")
-    print(f"  🧠 Memory DB    : {SETTINGS.memory.db_path}")
+    print(f"  🧠 Memory DB    : {settings.memory.db_path}")
     if not TARGET_CHANNELS:
         print("  ⚠️  No channel configured. Set CHANNEL_IDS/CHANNEL_SKILLS in .env")
     for ch_id in TARGET_CHANNELS:
@@ -189,7 +479,7 @@ async def on_ready():
         slowmode = ch.slowmode_delay
         try:
             resolved = resolve_channel_config(
-                SETTINGS,
+                settings,
                 ch.guild.id if getattr(ch, "guild", None) else None,
                 ch_id,
             )
@@ -205,6 +495,7 @@ async def on_ready():
 
 @client.event
 async def on_message(message):
+    settings = _CURRENT_SETTINGS
     if _is_duplicate_message(message.id):
         print(f"🔁 Skip duplicate message id={message.id}")
         return
@@ -213,7 +504,7 @@ async def on_message(message):
         return
 
     scope = _event_scope_from_message(message)
-    resolved = resolve_channel_config(SETTINGS, scope.guild_id, scope.channel_id)
+    resolved = resolve_channel_config(settings, scope.guild_id, scope.channel_id)
     if not resolved.enabled:
         return
 
@@ -224,11 +515,15 @@ async def on_message(message):
         content=message.content or "",
         has_reference_to_self=is_reference_to_self,
         is_mentioned=is_mentioned,
-        keywords=SETTINGS.ai.keywords,
+        keywords=settings.ai.keywords,
         crypto_terms=CRYPTO_SIGNAL_TERMS,
     )
 
-    ok, reason = passes_basic_filters(message, allow_short_message=mode.is_direct_reply)
+    ok, reason = passes_basic_filters(
+        message,
+        settings,
+        allow_short_message=mode.is_direct_reply,
+    )
     if not ok:
         print(f"🔇 Skip [{reason}] -> {message.content[:40]}")
         return
@@ -257,8 +552,8 @@ async def on_message(message):
     plan = plan_reply(
         mode=mode,
         profile=resolved.profile,
-        latest_bot_reply_ts=event_store.latest_bot_reply_ts(scope.channel_id),
-        agent_settings=SETTINGS.agent,
+        latest_bot_reply_ts=event_store.latest_bot_reply_ts(scope),
+        agent_settings=settings.agent,
     )
     if plan.action == "ignore" or not plan.delay_type:
         print(f"🔇 Plan ignore [{plan.reason}|{mode.mode}] -> {message.content[:50]}")
@@ -284,13 +579,13 @@ async def on_message(message):
     cached_context = recent_context.get_context(
         channel_id=scope.channel_id,
         thread_id=scope.thread_id,
-        limit=SETTINGS.ai.history_limit,
+        limit=settings.ai.history_limit,
     )
     db_context = event_store.get_recent_context(
         scope=scope,
-        limit=SETTINGS.ai.history_limit,
+        limit=settings.ai.history_limit,
     )
-    combined_context = (cached_context + db_context)[-SETTINGS.ai.history_limit :]
+    combined_context = (cached_context + db_context)[-settings.ai.history_limit :]
     profile = user_profiles.get_profile(message.author.id)
     system_prompt = build_system_prompt(resolved.skill, mode.is_crypto)
     user_prompt = build_user_prompt(
@@ -301,9 +596,9 @@ async def on_message(message):
         is_direct_reply=mode.is_direct_reply,
     )
     max_tokens = (
-        SETTINGS.ai.max_tokens_conversation
+        settings.ai.max_tokens_conversation
         if mode.is_direct_reply
-        else SETTINGS.ai.max_tokens_chime_in
+        else settings.ai.max_tokens_chime_in
     )
 
     reply_candidate = None
@@ -313,18 +608,18 @@ async def on_message(message):
     if not reply_candidate:
         generation = await generate_reply(
             ai=ai,
-            models_to_try=SETTINGS.ai.models or ["arcee-ai/trinity-large-preview:free"],
+            models_to_try=settings.ai.models or ["arcee-ai/trinity-large-preview:free"],
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             max_tokens=max_tokens,
-            temperature=SETTINGS.ai.temperature,
+            temperature=settings.ai.temperature,
             retries=3,
         )
         reply_candidate = generation.text
 
     recent_replies = event_store.get_recent_bot_replies(
         scope=scope,
-        limit=SETTINGS.memory.anti_repeat_window,
+        limit=settings.memory.anti_repeat_window,
     )
     reviewed_reply = critique_reply(
         text=reply_candidate,
@@ -345,11 +640,11 @@ async def on_message(message):
         )
         retry_generation = await generate_reply(
             ai=ai,
-            models_to_try=SETTINGS.ai.models or ["arcee-ai/trinity-large-preview:free"],
+            models_to_try=settings.ai.models or ["arcee-ai/trinity-large-preview:free"],
             system_prompt=system_prompt,
             user_prompt=retry_prompt,
             max_tokens=min(max_tokens, 36),
-            temperature=max(0.35, SETTINGS.ai.temperature - 0.15),
+            temperature=max(0.35, settings.ai.temperature - 0.15),
             retries=2,
         )
         reviewed_reply = critique_reply(
@@ -383,4 +678,4 @@ async def on_message(message):
     )
 
 _acquire_single_instance_lock()
-client.run(SETTINGS.credentials.discord_token)
+client.run(_CURRENT_SETTINGS.credentials.discord_token)

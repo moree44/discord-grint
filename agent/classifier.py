@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 
 
 GREETING_TERMS = ("gm", "good morning", "morning", "hello", "hi", "hey", "good night", "gn")
@@ -51,7 +52,7 @@ def classify_message(
             has_keyword=has_keyword,
             is_crypto=True,
         )
-    if any(term in lowered for term in GREETING_TERMS):
+    if any(re.search(rf"\b{re.escape(term)}\b", lowered) for term in GREETING_TERMS):
         return ModeResult(
             mode="smalltalk",
             reason="greeting",

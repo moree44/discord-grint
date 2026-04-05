@@ -113,6 +113,120 @@ def _parse_channel_skills(raw_value) -> dict[int, str]:
     return mapping
 
 
+def _parse_channel_profiles(raw_value) -> dict[int, str]:
+    if raw_value is None:
+        return {}
+    if isinstance(raw_value, dict):
+        parsed: dict[int, str] = {}
+        for key, value in raw_value.items():
+            key_text = str(key).strip()
+            profile = str(value).strip()
+            if not key_text.isdigit() or not profile:
+                continue
+            parsed[int(key_text)] = profile
+        return parsed
+
+    raw_text = str(raw_value)
+    if not raw_text.strip():
+        return {}
+
+    mapping: dict[int, str] = {}
+    for part in raw_text.split(","):
+        item = part.strip()
+        if not item:
+            continue
+        if ":" not in item:
+            raise ValueError(
+                "CHANNEL_PROFILES must be comma-separated channel_id:profile pairs"
+            )
+        channel_part, profile_part = item.split(":", 1)
+        channel_text = channel_part.strip()
+        profile = profile_part.strip()
+        if not channel_text.isdigit():
+            raise ValueError(
+                "CHANNEL_PROFILES channel id must be numeric, e.g. 123456789012345678:normal"
+            )
+        if not profile:
+            raise ValueError(
+                "CHANNEL_PROFILES profile key cannot be empty, e.g. 123456789012345678:normal"
+            )
+        mapping[int(channel_text)] = profile
+    return mapping
+
+
+def _parse_channel_custom_delays(raw_value) -> dict[int, dict[str, tuple[int, int]]]:
+    if raw_value is None:
+        return {}
+    if isinstance(raw_value, dict):
+        parsed: dict[int, dict[str, tuple[int, int]]] = {}
+        for key, value in raw_value.items():
+            key_text = str(key).strip()
+            if not key_text.isdigit() or not isinstance(value, dict):
+                continue
+            try:
+                direct_min = int(value.get("direct_min"))
+                direct_max = int(value.get("direct_max"))
+                keyword_min = int(value.get("keyword_min"))
+                keyword_max = int(value.get("keyword_max"))
+                random_min = int(value.get("random_min"))
+                random_max = int(value.get("random_max"))
+            except (TypeError, ValueError):
+                continue
+            if not (direct_min <= direct_max and keyword_min <= keyword_max and random_min <= random_max):
+                continue
+            parsed[int(key_text)] = {
+                "replied_to_us": (direct_min, direct_max),
+                "mentioned": (direct_min, direct_max),
+                "keyword_hit": (keyword_min, keyword_max),
+                "random": (random_min, random_max),
+            }
+        return parsed
+
+    raw_text = str(raw_value).strip()
+    if not raw_text:
+        return {}
+
+    mapping: dict[int, dict[str, tuple[int, int]]] = {}
+    for part in raw_text.split(","):
+        item = part.strip()
+        if not item:
+            continue
+        if ":" not in item:
+            raise ValueError(
+                "CHANNEL_CUSTOM_DELAYS must use channel_id:directMin-directMax|keywordMin-keywordMax|randomMin-randomMax"
+            )
+        channel_part, ranges_part = item.split(":", 1)
+        channel_text = channel_part.strip()
+        if not channel_text.isdigit():
+            raise ValueError("CHANNEL_CUSTOM_DELAYS channel id must be numeric")
+
+        segments = [seg.strip() for seg in ranges_part.split("|")]
+        if len(segments) != 3:
+            raise ValueError(
+                "CHANNEL_CUSTOM_DELAYS requires 3 ranges: direct|keyword|random"
+            )
+
+        parsed_ranges: list[tuple[int, int]] = []
+        for segment in segments:
+            if "-" not in segment:
+                raise ValueError("CHANNEL_CUSTOM_DELAYS range must use min-max")
+            min_part, max_part = segment.split("-", 1)
+            low = int(min_part.strip())
+            high = int(max_part.strip())
+            if low > high:
+                raise ValueError("CHANNEL_CUSTOM_DELAYS min must be <= max")
+            parsed_ranges.append((low, high))
+
+        direct_rng, keyword_rng, random_rng = parsed_ranges
+        mapping[int(channel_text)] = {
+            "replied_to_us": direct_rng,
+            "mentioned": direct_rng,
+            "keyword_hit": keyword_rng,
+            "random": random_rng,
+        }
+    return mapping
+
+
 def _int_setting(name: str, default: int) -> int:
     raw = _get_setting(name, default)
     try:
@@ -182,6 +296,9 @@ class AgentSettings:
     random_cooldown_seconds: int
     direct_reply_cooldown_seconds: int
     smalltalk_reply_chance: float
+    proactive_interval_minutes: int
+    proactive_min_messages: int
+    proactive_chance: float
 
 
 @dataclass(frozen=True)
@@ -202,6 +319,8 @@ class ServerConfig:
 class RoutingSettings:
     channel_ids: list[int]
     channel_skills: dict[int, str]
+    channel_profiles: dict[int, str]
+    channel_custom_delays: dict[int, dict[str, tuple[int, int]]]
     default_skill: str
     default_profile: str
     profiles: dict[str, ReplyProfile]
@@ -211,6 +330,8 @@ class RoutingSettings:
     def watched_channel_ids(self) -> set[int]:
         watched = set(self.channel_ids)
         watched.update(self.channel_skills.keys())
+        watched.update(self.channel_profiles.keys())
+        watched.update(self.channel_custom_delays.keys())
         for server_cfg in self.servers.values():
             if not server_cfg.channels:
                 continue
@@ -244,11 +365,16 @@ def resolve_channel_config(
     enabled = (
         channel_id in settings.routing.channel_ids
         or channel_id in settings.routing.channel_skills
+        or channel_id in settings.routing.channel_profiles
+        or channel_id in settings.routing.channel_custom_delays
     )
 
     global_channel_skill = settings.routing.channel_skills.get(channel_id)
     if global_channel_skill:
         skill = global_channel_skill
+    global_channel_profile = settings.routing.channel_profiles.get(channel_id)
+    if global_channel_profile:
+        profile_name = global_channel_profile
 
     server_cfg = settings.routing.servers.get(guild_id) if guild_id is not None else None
     if server_cfg:
@@ -269,6 +395,11 @@ def resolve_channel_config(
     if profile is None:
         raise ValueError(f"Unknown profile '{profile_name}' in channel routing config")
 
+    custom_delays = settings.routing.channel_custom_delays.get(channel_id)
+    if custom_delays:
+        profile = ReplyProfile(chance=profile.chance, delays=custom_delays)
+        profile_name = f"{profile_name}+custom"
+
     return ResolvedChannelConfig(
         enabled=enabled,
         skill=skill,
@@ -285,6 +416,8 @@ def load_settings() -> AppSettings:
 
     channel_ids = _parse_channel_ids(_get_setting("CHANNEL_IDS", ""))
     channel_skills = _parse_channel_skills(_get_setting("CHANNEL_SKILLS", ""))
+    channel_profiles = _parse_channel_profiles(_get_setting("CHANNEL_PROFILES", ""))
+    channel_custom_delays = _parse_channel_custom_delays(_get_setting("CHANNEL_CUSTOM_DELAYS", ""))
     default_skill = str(_get_setting("DEFAULT_SKILL", "donut_browser"))
 
     profiles = {
@@ -338,11 +471,20 @@ def load_settings() -> AppSettings:
         ),
     }
 
+    unknown_profiles = sorted({name for name in channel_profiles.values() if name not in profiles})
+    if unknown_profiles:
+        raise ValueError(
+            f"Unknown profile(s) in CHANNEL_PROFILES: {', '.join(unknown_profiles)}. "
+            f"Allowed: {', '.join(sorted(profiles.keys()))}"
+        )
+
     servers: dict[int, ServerConfig] = {}
 
     routing = RoutingSettings(
         channel_ids=channel_ids,
         channel_skills=channel_skills,
+        channel_profiles=channel_profiles,
+        channel_custom_delays=channel_custom_delays,
         default_skill=default_skill,
         default_profile="normal",
         profiles=profiles,
@@ -395,6 +537,9 @@ def load_settings() -> AppSettings:
         random_cooldown_seconds=_int_setting("RANDOM_COOLDOWN_SECONDS", 45),
         direct_reply_cooldown_seconds=_int_setting("DIRECT_REPLY_COOLDOWN_SECONDS", 12),
         smalltalk_reply_chance=_float_setting("SMALLTALK_REPLY_CHANCE", 0.35),
+        proactive_interval_minutes=_int_setting("PROACTIVE_INTERVAL_MINUTES", 10),
+        proactive_min_messages=_int_setting("PROACTIVE_MIN_MESSAGES", 3),
+        proactive_chance=_float_setting("PROACTIVE_CHANCE", 0.50),
     )
 
     return AppSettings(
@@ -417,6 +562,10 @@ CHANNEL_IDS = SETTINGS.routing.channel_ids
 DEFAULT_SKILL = SETTINGS.routing.default_skill
 CHANNEL_SKILLS = {
     channel_id: SETTINGS.routing.channel_skills.get(channel_id, DEFAULT_SKILL)
+    for channel_id in SETTINGS.routing.watched_channel_ids
+}
+CHANNEL_PROFILES = {
+    channel_id: SETTINGS.routing.channel_profiles.get(channel_id, SETTINGS.routing.default_profile)
     for channel_id in SETTINGS.routing.watched_channel_ids
 }
 

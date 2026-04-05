@@ -6,10 +6,14 @@
   <title>discord-grint :: control panel</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
-<body>
+<body data-initial-view="{{ initial_view or 'settings' }}">
   <main class="wrap">
     <header class="bar">
       <div class="title">discord-grint / control panel</div>
+      <nav class="top-nav">
+        <a href="/settings" data-view="settings" class="{% if (initial_view or 'settings') == 'settings' %}active{% endif %}">Settings</a>
+        <a href="/monitoring" data-view="monitoring" class="{% if (initial_view or 'settings') == 'monitoring' %}active{% endif %}">Monitoring</a>
+      </nav>
       <div class="header-actions">
         <div class="muted">simple mode</div>
         <form method="post" action="/logout">
@@ -18,7 +22,7 @@
       </div>
     </header>
 
-    <section class="grid">
+    <section id="view-settings" class="grid single-col {% if (initial_view or 'settings') != 'settings' %}hidden-view{% endif %}">
       <article class="card">
         <h2>Bot Control</h2>
         <div class="control-row">
@@ -40,6 +44,25 @@
       <article class="card">
         <h2>Settings</h2>
         <form id="settings-form">
+          <div class="quick-grid">
+            <div class="quick-item">
+              <span class="k">Model</span>
+              <strong id="summary-model">-</strong>
+            </div>
+            <div class="quick-item">
+              <span class="k">Channels</span>
+              <strong id="summary-channel-count">0</strong>
+            </div>
+            <div class="quick-item">
+              <span class="k">Default Skill</span>
+              <strong id="summary-default-skill">-</strong>
+            </div>
+            <div class="quick-item">
+              <span class="k">Reply Style</span>
+              <strong id="summary-reply-style">-</strong>
+            </div>
+          </div>
+
           <label>Base Persona (read-only)
             <input value="{{ base_persona }}" readonly>
           </label>
@@ -48,7 +71,7 @@
           </label>
           <p class="muted">Model AI disimpan di `.env`. Setting lain disimpan di `web_settings.json`.</p>
 
-          <div class="section-label">Routing</div>
+          <div class="section-label">Routing Channel</div>
           <p class="hint">Atur di channel mana bot aktif dan persona default yang dipakai.</p>
           <label>Default Skill / Persona
             <select name="DEFAULT_SKILL" id="default-skill">
@@ -58,32 +81,50 @@
               {% endfor %}
             </select>
           </label>
-          <label>Channel IDs (pisahkan dengan koma)
-            <input name="CHANNEL_IDS" value="{{ settings.CHANNEL_IDS }}" placeholder="contoh: 123456,987654">
-          </label>
           <div class="map-box">
             <div class="map-head">
-              <span>Skill per channel (opsional)</span>
-              <button type="button" id="btn-add-map">Tambah Mapping</button>
+              <span>Daftar Channel (lintas server)</span>
+              <button type="button" id="btn-add-map">Tambah Channel</button>
             </div>
+            <p class="hint">Cukup isi Channel ID, pilih Skill, lalu pilih Delay Profile untuk channel itu.</p>
+            <input type="hidden" name="CHANNEL_IDS" id="channel-ids-hidden" value="{{ settings.CHANNEL_IDS }}">
             <input type="hidden" name="CHANNEL_SKILLS" id="channel-skills-hidden" value="{{ settings.CHANNEL_SKILLS }}">
-            <div id="channel-skill-list" data-skill-options='{{ skill_options|tojson }}'>
-              {% for row in channel_skill_rows %}
-              <div class="map-row">
-                <input class="map-channel" placeholder="channel id" value="{{ row.channel_id }}">
-                <select class="map-skill">
-                  <option value="{{ row.skill }}">{{ row.skill }}</option>
-                  {% for skill in skill_options %}
-                  <option value="{{ skill }}">{{ skill }}</option>
-                  {% endfor %}
-                </select>
-                <button type="button" class="btn-remove-map">Hapus</button>
+            <input type="hidden" name="CHANNEL_PROFILES" id="channel-profiles-hidden" value="{{ settings.CHANNEL_PROFILES }}">
+            <input type="hidden" name="CHANNEL_CUSTOM_DELAYS" id="channel-custom-delays-hidden" value="{{ settings.CHANNEL_CUSTOM_DELAYS }}">
+            <div id="channel-skill-list" data-skill-options='{{ skill_options|tojson }}' data-profile-options='{{ profile_options|tojson }}'>
+              {% for row in channel_route_rows %}
+              <div class="map-item">
+                <div class="map-row">
+                  <input class="map-channel" placeholder="channel id" value="{{ row.channel_id }}">
+                  <select class="map-skill">
+                    <option value="{{ row.skill }}">{{ row.skill }}</option>
+                    {% for skill in skill_options %}
+                    <option value="{{ skill }}">{{ skill }}</option>
+                    {% endfor %}
+                  </select>
+                  <select class="map-profile">
+                    <option value="{{ row.profile }}">{{ row.profile }}</option>
+                    {% for profile in profile_options %}
+                    <option value="{{ profile }}">{{ profile }}</option>
+                    {% endfor %}
+                  </select>
+                  <label class="map-custom-toggle"><input type="checkbox" class="map-custom-enabled" {% if row.custom_enabled %}checked{% endif %}>Custom Delay</label>
+                  <button type="button" class="btn-remove-map">Hapus</button>
+                </div>
+                <div class="map-custom-row {% if not row.custom_enabled %}hidden-view{% endif %}">
+                  <input class="map-direct-min" placeholder="Direct Min" value="{{ row.direct_min }}">
+                  <input class="map-direct-max" placeholder="Direct Max" value="{{ row.direct_max }}">
+                  <input class="map-keyword-min" placeholder="Keyword Min" value="{{ row.keyword_min }}">
+                  <input class="map-keyword-max" placeholder="Keyword Max" value="{{ row.keyword_max }}">
+                  <input class="map-random-min" placeholder="Random Min" value="{{ row.random_min }}">
+                  <input class="map-random-max" placeholder="Random Max" value="{{ row.random_max }}">
+                </div>
               </div>
               {% endfor %}
             </div>
           </div>
 
-          <div class="section-label">How Often Bot Replies</div>
+          <div class="section-label">Perilaku Reply</div>
           <p class="hint">Nilai 0.0 sampai 1.0. Makin besar nilainya, makin sering bot membalas.</p>
           <div class="inline">
             <label>Smalltalk Chance (0.0 - 1.0)
@@ -171,30 +212,69 @@
             <button type="submit">Save Settings</button>
             <button type="button" id="btn-save-restart">Save + Restart Bot</button>
           </div>
+          <p class="hint">Tip: setelah Save Settings, bot otomatis reload config dalam beberapa detik. Restart biasanya tidak diperlukan.</p>
           <p id="save-msg" class="muted"></p>
         </form>
       </article>
+    </section>
 
-      <article class="card card-span">
+    <section id="view-monitoring" class="grid single-col {% if (initial_view or 'settings') != 'monitoring' %}hidden-view{% endif %}">
+      <article class="card">
         <h2>Monitoring</h2>
+        <div class="toolbar">
+          <button type="button" id="btn-refresh-now">Refresh Sekarang</button>
+          <label class="inline-check">
+            <input type="checkbox" id="auto-refresh-toggle" checked>
+            Auto-refresh 4 detik
+          </label>
+          <input id="channel-filter" placeholder="Filter Server/Channel ID...">
+        </div>
+        <div class="hint" id="monitoring-summary">Menunggu data...</div>
         <div class="stats">
+          <div><span class="k">Bot Status</span><span id="bot-status-monitoring">-</span></div>
+          <div><span class="k">PID</span><span id="bot-pid-monitoring">-</span></div>
           <div><span class="k">DB</span><span id="db-exists">-</span></div>
           <div><span class="k">Events</span><span id="total-events">-</span></div>
           <div><span class="k">Users</span><span id="total-users">-</span></div>
           <div><span class="k">Replies (24h)</span><span id="replies-24h">-</span></div>
           <div><span class="k">Last Event Age</span><span id="last-age">-</span></div>
+          <div><span class="k">Rows</span><span id="scope-row-count">0</span></div>
         </div>
         <p class="muted" id="db-path">db: -</p>
-        <div class="log-grid">
-          <div>
-            <div class="log-title">Memory Events</div>
-            <pre id="events-log" class="terminal"></pre>
-          </div>
-          <div>
-            <div class="log-title">Bot Runtime Log</div>
-            <pre id="bot-log" class="terminal"></pre>
-          </div>
+
+        <div class="stats">
+          <div><span class="k">Latest Event</span><span id="last-event-at">-</span></div>
+          <div><span class="k">Top Channel (24h)</span><span id="top-channel-24h">-</span></div>
         </div>
+
+        <div class="section-label">Per Server / Channel</div>
+        <p class="hint">Ringkasan aktivitas dipisah per server dan channel (berdasarkan ID).</p>
+        <div class="scope-wrap">
+          <table class="scope-table">
+            <thead>
+              <tr>
+                <th>Server</th>
+                <th>Channel</th>
+                <th>Events</th>
+                <th>Replies 24h</th>
+                <th>Last Event</th>
+              </tr>
+            </thead>
+            <tbody id="scope-summary-body"></tbody>
+          </table>
+        </div>
+      </article>
+
+      <article class="card card-span">
+        <h2>Logs</h2>
+        <details open>
+          <summary>Memory Events</summary>
+          <pre id="events-log" class="terminal"></pre>
+        </details>
+        <details open>
+          <summary>Bot Runtime Log</summary>
+          <pre id="bot-log" class="terminal"></pre>
+        </details>
       </article>
     </section>
   </main>

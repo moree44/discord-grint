@@ -54,7 +54,11 @@ class EventStore:
             created_at=now_ts,
             expires_at=expires_at,
         )
-        self.store.trim_events_for_channel(scope.channel_id, self.max_recent_context)
+        self.store.trim_events_for_scope(
+            channel_id=scope.channel_id,
+            thread_id=scope.thread_id,
+            keep_last=self.max_recent_context,
+        )
         if user_id is not None:
             self.store.trim_events_for_user(user_id, self.max_events_per_user)
 
@@ -80,5 +84,33 @@ class EventStore:
             limit=limit,
         )
 
-    def latest_bot_reply_ts(self, channel_id: int) -> int | None:
-        return self.store.latest_event_ts(event_type="bot_reply", channel_id=channel_id)
+    def latest_bot_reply_ts(self, scope: EventScope) -> int | None:
+        return self.store.latest_event_ts_for_scope(
+            event_type="bot_reply",
+            channel_id=scope.channel_id,
+            thread_id=scope.thread_id,
+        )
+
+    def has_active_chat(self, *, scope: EventScope, since_ts: int, min_messages: int) -> bool:
+        return self.count_recent_user_messages(
+            scope=scope,
+            since_ts=since_ts,
+            limit=50,
+        ) >= min_messages
+
+    def count_recent_user_messages(
+        self,
+        *,
+        scope: EventScope,
+        since_ts: int,
+        limit: int = 80,
+    ) -> int:
+        rows = self.store.recent_events_for_scope(
+            channel_id=scope.channel_id,
+            thread_id=scope.thread_id,
+            limit=limit,
+        )
+        return sum(
+            1 for row in rows
+            if row["event_type"] == "user_message" and int(row["created_at"]) >= since_ts
+        )

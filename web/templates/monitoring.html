@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>discord-grint :: monitoring</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <main class="wrap">
+    <header class="bar">
+      <div class="title">discord-grint / control panel</div>
+      <nav class="top-nav">
+        <a href="/settings">Settings</a>
+        <a href="/monitoring" class="active">Monitoring</a>
+      </nav>
+      <div class="header-actions">
+        <div class="muted">logs & status</div>
+        <form method="post" action="/logout">
+          <button type="submit">Logout</button>
+        </form>
+      </div>
+    </header>
+
+    <section class="grid single-col">
+      <article class="card">
+        <h2>Bot Status</h2>
+        <div class="status-line">
+          <span class="k">Status</span>
+          <span id="bot-status">-</span>
+        </div>
+        <div class="status-line">
+          <span class="k">PID</span>
+          <span id="bot-pid">-</span>
+        </div>
+        <p class="muted">Halaman ini auto-refresh setiap 4 detik.</p>
+      </article>
+
+      <article class="card card-span">
+        <h2>Monitoring</h2>
+        <div class="stats">
+          <div><span class="k">DB</span><span id="db-exists">-</span></div>
+          <div><span class="k">Events</span><span id="total-events">-</span></div>
+          <div><span class="k">Users</span><span id="total-users">-</span></div>
+          <div><span class="k">Replies (24h)</span><span id="replies-24h">-</span></div>
+          <div><span class="k">Last Event Age</span><span id="last-age">-</span></div>
+        </div>
+        <p class="muted" id="db-path">db: -</p>
+        <div class="log-grid">
+          <div>
+            <div class="log-title">Memory Events</div>
+            <pre id="events-log" class="terminal"></pre>
+          </div>
+          <div>
+            <div class="log-title">Bot Runtime Log</div>
+            <pre id="bot-log" class="terminal"></pre>
+          </div>
+        </div>
+      </article>
+    </section>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>

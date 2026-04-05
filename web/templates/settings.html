@@ -3,13 +3,17 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>discord-grint :: control panel</title>
+  <title>discord-grint :: settings</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
   <main class="wrap">
     <header class="bar">
       <div class="title">discord-grint / control panel</div>
+      <nav class="top-nav">
+        <a href="/settings" class="active">Settings</a>
+        <a href="/monitoring">Monitoring</a>
+      </nav>
       <div class="header-actions">
         <div class="muted">simple mode</div>
         <form method="post" action="/logout">
@@ -18,7 +22,7 @@
       </div>
     </header>
 
-    <section class="grid">
+    <section class="grid single-col">
       <article class="card">
         <h2>Bot Control</h2>
         <div class="control-row">
@@ -171,30 +175,9 @@
             <button type="submit">Save Settings</button>
             <button type="button" id="btn-save-restart">Save + Restart Bot</button>
           </div>
+          <p class="hint">Tip: setelah Save Settings, bot otomatis reload config dalam beberapa detik. Restart biasanya tidak diperlukan.</p>
           <p id="save-msg" class="muted"></p>
         </form>
-      </article>
-
-      <article class="card card-span">
-        <h2>Monitoring</h2>
-        <div class="stats">
-          <div><span class="k">DB</span><span id="db-exists">-</span></div>
-          <div><span class="k">Events</span><span id="total-events">-</span></div>
-          <div><span class="k">Users</span><span id="total-users">-</span></div>
-          <div><span class="k">Replies (24h)</span><span id="replies-24h">-</span></div>
-          <div><span class="k">Last Event Age</span><span id="last-age">-</span></div>
-        </div>
-        <p class="muted" id="db-path">db: -</p>
-        <div class="log-grid">
-          <div>
-            <div class="log-title">Memory Events</div>
-            <pre id="events-log" class="terminal"></pre>
-          </div>
-          <div>
-            <div class="log-title">Bot Runtime Log</div>
-            <pre id="bot-log" class="terminal"></pre>
-          </div>
-        </div>
       </article>
     </section>
   </main>

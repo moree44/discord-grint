@@ -127,6 +127,35 @@ Constraints:
 """
 
 
+def build_proactive_prompt(
+    *,
+    recent_context: list[str],
+    language_hint: str | None = None,
+    crowd_hint: str | None = None,
+) -> str:
+    context_text = "\n".join(recent_context[-20:]) if recent_context else "(no context)"
+    extra_rules: list[str] = []
+    if language_hint:
+        extra_rules.append(f"- Preferred language style: {language_hint}")
+    if crowd_hint:
+        extra_rules.append(f"- Crowd/channel hint: {crowd_hint}")
+    extra_text = "\n".join(extra_rules) if extra_rules else "- Match the latest crowd tone naturally."
+    return f"""Chat context:
+---
+{context_text}
+---
+
+Proactive observer mode:
+You are monitoring the chat. No one has explicitly talked to you. 
+If the conversation is engaging and relevant to you, or there's a good opening, you can drop a casual related comment to chime in.
+If you don't feel like talking, or the chat is too dead, or there's nothing interesting to add, just output exactly "IGNORE_CHAT" or "IGNORE".
+Do not say "IGNORE_CHAT" if you want to speak. If you want to speak, just output the text you want to send directly.
+Remember to follow your persona. Keep it concise, casual, plain text only.
+Additional rules:
+{extra_text}
+"""
+
+
 @dataclass(frozen=True)
 class GenerationResult:
     text: str | None
@@ -156,8 +185,10 @@ async def generate_reply(
                     temperature=temperature,
                 )
                 content = response.choices[0].message.content
-                if content and content.strip():
-                    return GenerationResult(text=content.strip(), model_used=model_name)
+                if content:
+                    content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
+                if content:
+                    return GenerationResult(text=content, model_used=model_name)
                 await asyncio.sleep(1)
             except Exception:
                 await asyncio.sleep(1)

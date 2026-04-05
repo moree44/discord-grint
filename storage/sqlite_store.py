@@ -103,21 +103,42 @@ class SQLiteStore:
             )
             return cur.rowcount
 
-    def trim_events_for_channel(self, channel_id: int, keep_last: int) -> None:
+    def trim_events_for_scope(
+        self,
+        *,
+        channel_id: int,
+        thread_id: int | None,
+        keep_last: int,
+    ) -> None:
         with self._connect() as conn:
-            conn.execute(
-                """
-                DELETE FROM events
-                WHERE channel_id = ?
-                  AND id NOT IN (
-                    SELECT id FROM events
-                    WHERE channel_id = ?
-                    ORDER BY created_at DESC
-                    LIMIT ?
-                  )
-                """,
-                (channel_id, channel_id, keep_last),
-            )
+            if thread_id is not None:
+                conn.execute(
+                    """
+                    DELETE FROM events
+                    WHERE thread_id = ?
+                      AND id NOT IN (
+                        SELECT id FROM events
+                        WHERE thread_id = ?
+                        ORDER BY created_at DESC
+                        LIMIT ?
+                      )
+                    """,
+                    (thread_id, thread_id, keep_last),
+                )
+            else:
+                conn.execute(
+                    """
+                    DELETE FROM events
+                    WHERE channel_id = ? AND thread_id IS NULL
+                      AND id NOT IN (
+                        SELECT id FROM events
+                        WHERE channel_id = ? AND thread_id IS NULL
+                        ORDER BY created_at DESC
+                        LIMIT ?
+                      )
+                    """,
+                    (channel_id, channel_id, keep_last),
+                )
 
     def trim_events_for_user(self, user_id: int, keep_last: int) -> None:
         with self._connect() as conn:
@@ -207,17 +228,34 @@ class SQLiteStore:
                 ).fetchall()
             return [row["content"] for row in rows]
 
-    def latest_event_ts(self, *, event_type: str, channel_id: int) -> int | None:
+    def latest_event_ts_for_scope(
+        self,
+        *,
+        event_type: str,
+        channel_id: int,
+        thread_id: int | None,
+    ) -> int | None:
         with self._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT created_at FROM events
-                WHERE event_type = ? AND channel_id = ?
-                ORDER BY created_at DESC
-                LIMIT 1
-                """,
-                (event_type, channel_id),
-            ).fetchone()
+            if thread_id is not None:
+                row = conn.execute(
+                    """
+                    SELECT created_at FROM events
+                    WHERE event_type = ? AND thread_id = ?
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """,
+                    (event_type, thread_id),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    """
+                    SELECT created_at FROM events
+                    WHERE event_type = ? AND channel_id = ? AND thread_id IS NULL
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """,
+                    (event_type, channel_id),
+                ).fetchone()
             if not row:
                 return None
             return int(row["created_at"])
